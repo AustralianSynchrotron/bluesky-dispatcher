@@ -126,7 +126,8 @@ if __name__ == "__main__":
     ws_thread_ready = threading.Event()
     ws_thread = threading.Thread(target=websocket_thread,
                                  kwargs={'ready_signal': ws_thread_ready},
-                                 daemon=False)
+                                 daemon=False,
+                                 name="websocket_thread")
     ws_thread.start()
     # wait for the websocket thread to get up and running and ready before
     # continuing
