@@ -72,12 +72,18 @@ class BlueskyPlan:
 
 
 def websocket_thread(ready_signal=None):
-    print("websocket thread: starting websocket")
+
+    print("websocket thread: establishing new event loop")
     loop_for_this_thread = asyncio.new_event_loop()
     asyncio.set_event_loop(loop_for_this_thread)
-    asyncio.ensure_future(websockets.serve(websocket_server, "0.0.0.0", 8765))
+
+    print("websocket thread: signalling that I'm ready")
     if ready_signal is not None:
         ready_signal.set()
+
+    print("websocket thread: starting websocket server")
+    loop_for_this_thread.run_until_complete(websockets.serve(websocket_server, "0.0.0.0", 8765))
+    loop_for_this_thread.close()
 
 
 async def websocket_server(websocket, path):
