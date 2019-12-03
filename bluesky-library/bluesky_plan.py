@@ -30,26 +30,27 @@ class BlueskyPlan:
                         restful_host='http://camera-server:8000',
                         websocket_url='ws://camera-server:8000/ws'):
         # create signals (aka devices)
-        camera = CameraDetector(name='camera',
-                                restful_host=restful_host,
-                                websocket_url=websocket_url)
-        rss = RedisSlewScan(name='slew_scan',
-                            start_y=start_y,
-                            height=height,
-                            pitch=pitch)
+        # camera = CameraDetector(name='camera',
+        #                         restful_host=restful_host,
+        #                         websocket_url=websocket_url)
+        # rss = RedisSlewScan(name='slew_scan',
+        #                     start_y=start_y,
+        #                     height=height,
+        #                     pitch=pitch)
+        #
+        #
+        # # set up monitors that allow sending real-time data from the
+        # # slew scan to Kafka
+        # sd = SupplementalData()
+        # sd.monitors.append(rss)
+        # sd.monitors.append(camera)
+        # self.RE.preprocessors.append(sd)
+        #
+        # # attach Kafka producer. This will make sure Bluesky documents
+        # # are sent to Kafka
+        # producer = BlueskyKafkaProducer('kafka:9092')
+        # self.RE.subscribe(producer.send)
 
-
-        # set up monitors that allow sending real-time data from the
-        # slew scan to Kafka
-        sd = SupplementalData()
-        sd.monitors.append(rss)
-        sd.monitors.append(camera)
-        self.RE.preprocessors.append(sd)
-
-        # attach Kafka producer. This will make sure Bluesky documents
-        # are sent to Kafka
-        producer = BlueskyKafkaProducer('kafka:9092')
-        self.RE.subscribe(producer.send)
         # run plan
         self.RE(count([det1, det2]))
         print("scan finished ( in do_helical_scan )")
