@@ -74,7 +74,7 @@ def websocket_thread(ready_signal=None):
         ready_signal.set()
 
 
-def websocket_server(websocket, path):
+async def websocket_server(websocket, path):
     print(f'websocket server: runengine state: {bp.RE.state}')
     print("websocket server: starting while true listen loop")
     while True:
