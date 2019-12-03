@@ -9,8 +9,10 @@ import threading
 import asyncio
 import websockets
 import json
+import time
 
 bp = None
+
 
 class BlueskyPlan:
 
@@ -53,6 +55,7 @@ class BlueskyPlan:
 
         # run plan
         self.RE(count([det1, det2]))
+        time.sleep(8)
         print("scan finished ( in do_helical_scan )")
 
 
