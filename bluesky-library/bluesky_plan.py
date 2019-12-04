@@ -12,7 +12,8 @@ import json
 import time
 
 bp = None
-
+busy = threading.Lock()
+start_scanning = threading.Event()
 
 class BlueskyPlan:
 
@@ -26,10 +27,12 @@ class BlueskyPlan:
         threading.Thread(target=self.do_helical_scan(), daemon=False).start()
 
     def do_fake_helical_scan(self):
+        busy.acquire()
         self.RE(count([det1, det2]))
-        time.sleep(8)  # because hard to test accompanying threads when this
+        time.sleep(10)  # because hard to test accompanying threads when this
         # ends in a couple ms due to simulated detectors not simulating much
         print("scan finished ( in do_fake_helical_scan )")
+        busy.release()
 
     def do_helical_scan(self,
                         start_y=10,
@@ -38,6 +41,7 @@ class BlueskyPlan:
                         restful_host='http://camera-server:8000',
                         websocket_url='ws://camera-server:8000/ws'):
         # create signals (aka devices)
+        busy.acquire()
         camera = CameraDetector(name='camera',
                                 restful_host=restful_host,
                                 websocket_url=websocket_url)
@@ -62,6 +66,7 @@ class BlueskyPlan:
         # run plan
         self.RE(count([rss, camera]))
         print("scan finished ( in do_helical_scan )")
+        busy.release()
 
 
 # def state_hook_function(new_state, old_state):
@@ -88,49 +93,74 @@ def websocket_thread(ready_signal=None):
 
     print("websocket thread: starting websocket server")
     loop_for_this_thread.run_until_complete(websockets.serve(websocket_server, "0.0.0.0", 8765))
+    loop_for_this_thread.run_forever()
     loop_for_this_thread.close()
 
 
 async def websocket_server(websocket, path):
+    print("websocket server: client connected to me!")
     print(f'websocket server: runengine state: {bp.RE.state}')
-    print("websocket server: starting while true listen loop")
-    while True:
-        json_msg = await websocket.recv()
-        try:
-            obj = json.loads(json_msg)
-            """
-                obj should look something like:
+    print("websocket server: starting 'while true' listen loop")
 
-                {
-                    'type': 'start',
-                    'plan': 1
-                }
+    json_msg = await websocket.recv()
+    try:
+        obj = json.loads(json_msg)
+        """
+            obj should look something like:
 
-                or
+            {
+                'type': 'start',
+                'plan': 1
+            }
 
-                {
-                    'type': 'pause'
-                }
+            or
 
-                or
+            {
+                'type': 'pause'
+            }
 
-                {
-                    'type': 'state'
-                }
-            """
-        except json.JSONDecodeError:
-            obj = None
+            or
 
-        if obj is None:
-            print("websocket server: the following received "
-                  "message could not be properly decoded as json:")
-            print(json_msg)
-            continue  # do no more and start loop from beginning again
-        # now at this point we can be relatively
-        # confident obj is a proper object
-        print("websocket server: obj:")
-        print(obj)
-        print(f'websocket server: runengine state: {bp.RE.state}')
+            {
+                'type': 'state'
+            }
+        """
+    except json.JSONDecodeError:
+        obj = None
+
+    if obj is None:
+        print("websocket server: the following received "
+              "message could not be properly decoded as json:")
+        print(json_msg)
+        await websocket.send(json.dumps({
+            'success': False,
+            'status': "Your message could not be properly decoded, is it valid json?"}))
+        await websocket.close()
+        return None
+    # now at this point we can be relatively
+    # confident obj is a proper object
+    print("websocket server: obj:")
+    print(obj)
+    if obj['type'] == 'start':
+        if busy.locked():
+            # don't attempt to initiate another scan as one is already in
+            # progress as evidenced by the busy Lock
+            await websocket.send(json.dumps({
+                'success': False,
+                'status': 'Busy with a current scan'}))
+        else:
+            # initiate a scan by setting an event object that the main
+            # thread is waiting on before proceeding with scan
+            start_scanning.set()
+            start_scanning.clear()
+            await websocket.send(json.dumps({
+                'success': True,
+                'status': 'Signalling main thread to start a new scan'}))
+    else:
+        print("websocket server: ignoring that obj, just responding with RE"
+              " state for now")
+        await websocket.send(json.dumps({'runenginestate': bp.RE.state}))
+
 
 
 if __name__ == "__main__":
@@ -149,4 +179,6 @@ if __name__ == "__main__":
     # continuing
     ws_thread_ready.wait()
     # now go ahead and perform the scan
-    bp.do_fake_helical_scan()
+    while True:
+        start_scanning.wait()
+        bp.do_fake_helical_scan()
