@@ -24,26 +24,5 @@ async def hello():
         response = await websocket.recv()
         print(f'I\'m the websocket client and I got this response: {response}')
         await websocket.close(reason="thats enough testing for now")
-        # current_game_data = json.loads(current_game_data_jsonified)
-        # print("#################################")
-        # print("current game data so far:")
-        # print("#################################")
-        # print(current_game_data)
-        #
-        # print("#################################")
-        # print("updates from the server:")
-        # print("#################################")
-        # while True:
-        #     update = await websocket.recv()
-        #     print(update)
-        # name = input("What's your name? ")
-        #
-        # await websocket.send(name)
-        # print(f"> {name}")
-        #
-        # print(f"< {greeting}")
-        #
-        # first_xlist = await websocket.recv()
-        # print(f"< {first_xlist}")
 
 asyncio.get_event_loop().run_until_complete(hello())
