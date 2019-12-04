@@ -5,22 +5,16 @@ from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 from starlette.websockets import WebSocket
+import websockets
 import asyncio
-from bluesky_plan import do_scan
 import signal
+import json
 # import subprocess
 import os
 
-def blocking_library_function():
-    import time
-    print("going to sleep for 6 seconds, dreaming about blocks")
-    time.sleep(6)
-    print("and I'm awake again! time to return something")
-    return "Something"
-
 
 HTTP_409_CONFLICT = 409
-RE = None  # the RunEngine object
+# RE = None  # the RunEngine object
 # create an object to share data between coroutines,
 # stackoverflow link explains the python code:
 # https://stackoverflow.com/questions/19476816/creating-an-empty-object-in-python#19476841
@@ -63,6 +57,16 @@ def notify_coroutines(event_type):
     # Any coroutines await'ing this update_event_object are ran now.
     state.update_event_object.clear()
 
+async def start_scan(scan_name):
+    uri = "ws://localhost:8765"
+    async with websockets.connect(uri) as websocket:
+        payload = {"type": "start", "plan": scan_name}
+        await websocket.send(json.dumps(payload))
+        response = await websocket.recv()
+        await websocket.close(reason="will create a new connection if I need to")
+        return json.loads(response)  # todo: this is at risk if the response ISN"T valid json but since we also authored the code sending the response back chances are it will be fine
+    return {'status': 'error', 'msg': 'something went wrong in the websocket call to the bluesky service'}
+
 
 ################################################################################
 ##################    Start of our FastAPI implementation:    ##################
@@ -98,6 +102,31 @@ def read_root():
     return {"Helical": "Scan", "About": "This is the backend for the frontend (BFF) for the helical scan demo - see the /docs endpoint", "busy scanning": state.busy}
 
 
+@app.get("/testfakehelicalscan")
+async def fake_helical_scan_test():
+    # THE FAKE ONE!
+    # establish a new websocket connection to the bluesky websocket server
+    result = await start_scan("simulated")
+    # send a websocket message to the bluesky websocket server
+    # message: {'type': 'start', 'plan': 'simulated'}
+    # receive response from websocket server, expecting either resp['success'] True or False and corresponding resp['status'] message/reason.
+    # close the websocket connection
+    # return corresponding result {'starting' | 'busy' } to the client
+    return result
+
+
+@app.get("/testhelicalscan")
+async def helical_scan_test():
+    # establish a new websocket connection to the bluesky websocket server
+    result = await start_scan("helical scan")
+    # send a websocket message to the bluesky websocket server
+    # message: {'type': 'start', 'plan': 'helical scan'}
+    # receive response from websocket server, expecting either resp['success'] True or False and corresponding resp['status'] message/reason.
+    # close the websocket connection
+    # return corresponding result {'starting' | 'busy' } to the client
+    return result
+
+
 @app.post("/startscan")
 def startscan(s_params: ScanParams, response: Response):
     print("Helical scan starting")
@@ -110,7 +139,7 @@ def startscan(s_params: ScanParams, response: Response):
     state.result = None
     state.update_event_params = s_params
     notify_coroutines("start_scan")
-    do_scan(RE)
+    # do_scan(RE)
     return {"confirm": "scan starting, currently ignoring your params though"}
 
 
