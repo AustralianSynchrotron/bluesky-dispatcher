@@ -22,9 +22,7 @@ class BlueskyPlan:
         # passing empty array as context managers so that the run engine will
         # not try to register signal handlers or complain that its not the
         # main thread
-
-    def do_helical_scan_in_thread(self):
-        threading.Thread(target=self.do_helical_scan(), daemon=False).start()
+        self.selected_scan = self.do_fake_helical_scan
 
     def do_fake_helical_scan(self):
         busy.acquire()
@@ -149,6 +147,11 @@ async def websocket_server(websocket, path):
                 'success': False,
                 'status': 'Busy with a current scan'}))
         else:
+            # if plan was provided then switch the selected plan:
+            if obj['plan'] == 'simulated':
+                bp.selected_scan = bp.do_fake_helical_scan
+            if obj['plan'] == 'helical scan':
+                bp.selected_scan = bp.do_helical_scan
             # initiate a scan by setting an event object that the main
             # thread is waiting on before proceeding with scan
             start_scanning.set()
@@ -162,7 +165,6 @@ async def websocket_server(websocket, path):
         await websocket.send(json.dumps({'runenginestate': bp.RE.state}))
 
 
-
 if __name__ == "__main__":
     print("main thread: about to do the scan")
     # RE = RunEngine()
@@ -170,10 +172,26 @@ if __name__ == "__main__":
     # RE.log.setLevel('DEBUG')
     bp = BlueskyPlan()
     ws_thread_ready = threading.Event()
+    #   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .
     ws_thread = threading.Thread(target=websocket_thread,
                                  kwargs={'ready_signal': ws_thread_ready},
-                                 daemon=False,
+                                 daemon=True,
                                  name="websocket_thread")
+    # Regarding above Thread instantiation as a daemon thread:
+    # running the thread as a daemon means that the main thread will
+    # effectively forget about it once its started (which is how I've
+    # been mentally thinking about it anyway) the implications of this
+    # are then:
+    # a)    the websocket thread will be automatically killed when the main
+    #       thread is, this means you need to keep main thread alive for as
+    #       long as you wish the websocket thread to be (which we are)
+    # b)    You may run into issues if the websocket thread needed to shut
+    #       down gracefully, for example it had opened files for writing,
+    #       since the main thread will have lost control over it.
+    # c)    Most importantly, I don't have to press ctrl-C twice to kill
+    #       this script when I fail to have the main thread perform reaping
+    #       of the websocket thread.
+    #   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .
     ws_thread.start()
     # wait for the websocket thread to get up and running and ready before
     # continuing
@@ -181,4 +199,4 @@ if __name__ == "__main__":
     # now go ahead and perform the scan
     while True:
         start_scanning.wait()
-        bp.do_fake_helical_scan()
+        bp.selected_scan()

@@ -7,14 +7,23 @@ import asyncio
 import websockets
 import json
 
+use_real_helical_scan_plan_make_hardware_move = False
+# false means use simulated detectors in a fake plan instead
+
+
 async def hello():
     uri = "ws://localhost:8765"
     async with websockets.connect(uri) as websocket:
-        payload = {"type": "start", "hello": "there"}
+
+        plan = "simulated"  # this corresponds with expected label on websocket server in bluesky_plan.py
+        if use_real_helical_scan_plan_make_hardware_move:
+            plan = "helical scan"  # this corresponds with expected label on websocket server in bluesky_plan.py
+
+        payload = {"type": "start", "plan": plan}
         await websocket.send(json.dumps(payload))
         response = await websocket.recv()
         print(f'I\'m the websocket client and I got this response: {response}')
-        websocket.close(reason="had enough")
+        await websocket.close(reason="thats enough testing for now")
         # current_game_data = json.loads(current_game_data_jsonified)
         # print("#################################")
         # print("current game data so far:")
