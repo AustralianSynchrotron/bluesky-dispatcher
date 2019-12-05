@@ -12,6 +12,9 @@ import json
 # import subprocess
 import os
 
+BLUESKY_WEBSOCKET = os.environ.get('BLUESKY_SERVICE_WEBSOCKET_URI')
+if BLUESKY_WEBSOCKET is None:
+    raise AssertionError("Missing required environment variable (BLUESKY_SERVICE_WEBSOCKET_URI) pointing to the bluesky service's websocket")
 
 HTTP_409_CONFLICT = 409
 # RE = None  # the RunEngine object
@@ -57,9 +60,10 @@ def notify_coroutines(event_type):
     # Any coroutines await'ing this update_event_object are ran now.
     state.update_event_object.clear()
 
+
 async def start_scan(scan_name):
-    uri = "ws://localhost:8765"
-    async with websockets.connect(uri) as websocket:
+    # uri = "ws://localhost:8765"  # this needs to change to bluesky
+    async with websockets.connect(BLUESKY_WEBSOCKET) as websocket:
         payload = {"type": "start", "plan": scan_name}
         await websocket.send(json.dumps(payload))
         response = await websocket.recv()
