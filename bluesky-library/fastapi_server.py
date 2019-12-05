@@ -18,7 +18,7 @@ BLUESKY_WEBSOCKET = os.environ.get('BLUESKY_SERVICE_WEBSOCKET_URI')
 if BLUESKY_WEBSOCKET is None:
     raise AssertionError("Missing required environment variable (BLUESKY_SERVICE_WEBSOCKET_URI) pointing to the bluesky service's websocket")
 
-OPENAPI_PREFIX = os.environ.get('OPENAPI_PREFIX')
+OPENAPI_PREFIX = os.environ.get('OPENAPI_PREFIX', '')
 # This is necessary because in deployment, there is a traefik reverse
 # proxy that is rerouting requests to the path /bluesky/api to this
 # service, but is also stripping that prefix out of the path so when
@@ -43,8 +43,6 @@ OPENAPI_PREFIX = os.environ.get('OPENAPI_PREFIX')
 # endpoint - This solves the issue of the openapi swagger plugin assuming
 # that there is no url path prefixing or reverse proxy type stuff going on.
 # (read https://github.com/apigee-127/swagger-tools/issues/342 for background)
-if OPENAPI_PREFIX is None:
-    raise AssertionError("Missing required environment variable (OPENAPI_PREFIX) to declare traefik routing path prefix for this service")
 
 
 HTTP_409_CONFLICT = 409
