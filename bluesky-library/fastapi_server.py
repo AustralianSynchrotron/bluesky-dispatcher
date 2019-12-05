@@ -13,8 +13,39 @@ import json
 import os
 
 BLUESKY_WEBSOCKET = os.environ.get('BLUESKY_SERVICE_WEBSOCKET_URI')
+# This is the url to the websocket of the bluesky service, for
+# example: ws://bluesky:8765  or  ws://localhost:8765
 if BLUESKY_WEBSOCKET is None:
     raise AssertionError("Missing required environment variable (BLUESKY_SERVICE_WEBSOCKET_URI) pointing to the bluesky service's websocket")
+
+OPENAPI_PREFIX = os.environ.get('OPENAPI_PREFIX')
+# This is necessary because in deployment, there is a traefik reverse
+# proxy that is rerouting requests to the path /bluesky/api to this
+# service, but is also stripping that prefix out of the path so when
+# this service gets a http request it doesn't see that they requested
+# /bluesky/api/docs, it just sees that they requested /docs, and it
+# responds normally, but because it believes it's accessible at /docs
+# it encodes this into the javascript sent back to the client wherein
+# there is a part that tries to fetch an openapi_spec.json type file
+# that defines all the endpoints and is how the /docs UI is able to
+# render the right information. But unfortunately from the clients point
+# of view they are actually accessing this service not through SERVER/
+# but SERVER/bluesky/api/ and the docs not through SERVER/docs but
+# SERVER/bluesky/api/docs, so if the javascript they retrieve then tries
+# to subsequently retrieve SERVER/openapi_spec.json instead of
+# SERVER/bluesky/api/openapi_spec.json you can see that it's going to have
+# trouble
+
+# This prefix is to be used by the swagger documentation when it generates
+# client side javascript, so that the client can formulate a request back to
+# this service in order to retrieve the openapi spec json file that is needed
+# to describe all the available endpoints when the client visits the /docs
+# endpoint - This solves the issue of the openapi swagger plugin assuming
+# that there is no url path prefixing or reverse proxy type stuff going on.
+# (read https://github.com/apigee-127/swagger-tools/issues/342 for background)
+if OPENAPI_PREFIX is None:
+    raise AssertionError("Missing required environment variable (OPENAPI_PREFIX) to declare traefik routing path prefix for this service")
+
 
 HTTP_409_CONFLICT = 409
 # RE = None  # the RunEngine object
@@ -74,7 +105,7 @@ async def start_scan(scan_name):
 
 ################################################################################
 ##################    Start of our FastAPI implementation:    ##################
-app = FastAPI()
+app = FastAPI(openapi_prefix=OPENAPI_PREFIX)
 
 # for cors:
 origins = [
