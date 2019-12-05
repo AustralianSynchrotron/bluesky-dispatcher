@@ -131,12 +131,12 @@ class ScanParams(BaseModel):
 ##########################    FastAPI endpoints:    ############################
 
 @app.get("/")
-def read_root():
+def root_endpoint_diagnostics():
     return {"Helical": "Scan", "About": "This is the backend for the frontend (BFF) for the helical scan demo - see the /docs endpoint", "busy scanning": state.busy}
 
 
 @app.get("/testfakehelicalscan")
-async def fake_helical_scan_test():
+async def run_a_simulated_scan():
     # THE FAKE ONE!
     # establish a new websocket connection to the bluesky websocket server
     result = await start_scan("simulated")
@@ -149,7 +149,7 @@ async def fake_helical_scan_test():
 
 
 @app.get("/testhelicalscan")
-async def helical_scan_test():
+async def run_the_real_helical_scan_in_the_lab():
     # establish a new websocket connection to the bluesky websocket server
     result = await start_scan("helical scan")
     # send a websocket message to the bluesky websocket server
