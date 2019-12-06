@@ -53,11 +53,12 @@ import os
 WEBSOCKET_CONTROL_PORT = os.environ.get('WEBSOCKET_CONTROL_PORT', 8765)
 # WEBSOCKET_STATUS_PORT = os.environ.get('WEBSOCKET_STATUS_PORT', 8764)
 
-
+# global variables:
 bp = None
 busy = threading.Lock()
 start_scanning = threading.Event()
 state_update = threading.Event()
+websocket_state_update = asyncio.Event()
 
 class BlueskyPlan:
 
@@ -108,13 +109,15 @@ class BlueskyPlan:
 
 
 def state_hook_function(new_state, old_state):
-    state_update.set()  # this is the threading type of event, this function will be called from the main thread
-    # state_update.clear()  # get the waiting coroutine to clear it
+    """this function will be called from the main thread, in the
+    RunEngine code…
+    the waiting coroutine to bridge events will clear() it"""
+    state_update.set()  # this is the threading type of event
 
 
-async def function_to_bridge_thread_events_to_asyncio:
+async def coroutine_to_bridge_thread_events_to_asyncio(loop, threading_event, asyncio_event):
     """ The asyncio Event() primitive is NOT thread safe (according
-to the documentation, but the threading Event() primitive is blocking
+to the documentation), but the threading Event() primitive is blocking
 so we can't use that in any regular asyncio coroutine or else we risk
 blocking the entire asyncio event loop.
 This function serves to bridge the events between the main threading
@@ -123,12 +126,32 @@ executor to get around the blocking aspects of waiting on a threading
 Event primitive and then subsequently echo that threading.Event() using
 an asyncio.Event() that any waiting open websocket connection coroutines
 might happen to be Await'ing.
+
+We can do set() immediately followed by clear() when we deal with asyncio
+events, but when we're dealing with threading.Event() objects I believe
+it's safer to have the waiting threads be the ones to clear it, so that
+we can be sure that the waiting thread caught it, Otherwise I worry that a
+race condition would ensue,
+For example: The thread waiting on an event is not executed by the
+OS/hardware at the time the other thread sets and then immediately
+clears the event, by the time the thread doing the waiting is back to being
+executed by the OS/hardware it will have potentially missed the setting of
+the event it was waiting on.
    """
-    ...
+    while True:
+        await loop.run_in_executor(None, threading_event.wait)
+        threading_event.clear()
+        asyncio_event.set()
+        # at this point the asyncio event loop will pass control to any
+        # waiting websocket server coroutines that have subscribers so
+        # they can update their subscribers on the latest RunEngine state
+        # before passing control back to this, this is why we can do set()
+        # immediately followed by clear()
+        asyncio_event.clear()
 
 
 def websocket_thread(ready_signal=None):
-    # this is in the second thread which uses asyncio synchronization primitives
+    # this is the other thread which uses asyncio synchronization primitives
     print("websocket thread: establishing new event loop")
     loop_for_this_thread = asyncio.new_event_loop()
     asyncio.set_event_loop(loop_for_this_thread)
@@ -140,16 +163,27 @@ def websocket_thread(ready_signal=None):
         ready_signal.set()
 
     print("websocket thread: starting websocket control server")
-    loop_for_this_thread.run_until_complete(websockets.serve(websocket_server, "0.0.0.0", WEBSOCKET_CONTROL_PORT))
+    loop_for_this_thread.run_until_complete(
+        websockets.serve(
+            websocket_server,
+            "0.0.0.0",
+            WEBSOCKET_CONTROL_PORT))
 
-    # print("websocket thread: starting websocket status server")
-    # loop_for_this_thread.run_until_complete(websockets.serve(websocket_server, "0.0.0.0", WEBSOCKET_STATUS_PORT))
+    print("websocket thread: Setting the websocket state update Event() object")
+    global websocket_state_update  # using the global keyword here allows us to
+    # update the global instance of this variable, rather than treating the
+    # subsequent line as a local function scoped variable
+    websocket_state_update = asyncio.Event(loop=loop_for_this_thread)
+    print("websocket thread: starting events bridging function")
+    asyncio.ensure_future(
+        coroutine_to_bridge_thread_events_to_asyncio(
+            loop_for_this_thread,
+            state_update,
+            websocket_state_update), loop=loop_for_this_thread)
+
     loop_for_this_thread.run_forever()
     loop_for_this_thread.close()
 
-
-# async def websocket_status_server(websocket, path):
-#     print("websocket status server: client connected to me!")
 
 async def websocket_server(websocket, path):
     # this is in the second thread which uses asyncio synchronization primitives
@@ -241,8 +275,14 @@ async def websocket_server(websocket, path):
                 'state': bp.RE.state
             }))
             while True:
-                # then send them updates whenever the state changes
-                await asyncio.sleep(10)
+                # then wait until the state is updated:
+                await websocket_state_update.wait()
+                # then send our client an update:
+                await websocket.send(json.dumps({
+                    'type': 'status',
+                    'about': 'run engine state updates',
+                    'state': bp.RE.state
+                }))
 
         else:
             print("websocket server: ignoring that obj, just responding with RE"

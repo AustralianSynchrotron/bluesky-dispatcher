@@ -11,7 +11,7 @@ use_real_helical_scan_plan_make_hardware_move = False
 # false means use simulated detectors in a fake plan instead
 
 
-async def hello():
+async def test_starting_plan():
     uri = "ws://localhost:8765"
     async with websockets.connect(uri) as websocket:
 
@@ -25,4 +25,14 @@ async def hello():
         print(f'I\'m the websocket client and I got this response: {response}')
         await websocket.close(reason="thats enough testing for now")
 
-asyncio.get_event_loop().run_until_complete(hello())
+
+async def test_subscribing_to_updates():
+    uri = "ws://localhost:8765"
+    async with websockets.connect(uri) as websocket:
+        payload = {"type": "subscribe"}
+        await websocket.send(json.dumps(payload))
+        while True:
+            response = await websocket.recv()
+            print(f'I\'m the websocket subscriber and I got this response: {response}')
+
+asyncio.get_event_loop().run_until_complete(test_starting_plan())
