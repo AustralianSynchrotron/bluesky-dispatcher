@@ -49,21 +49,26 @@ import websockets
 import json
 import time
 import os
+import functools  # necessary for https://docs.python.org/3.6/library/asyncio-eventloop.html#asyncio.loop.run_in_executor
+# see https://docs.python.org/3.6/library/asyncio-eventloop.html#asyncio-pass-keywords
+from queue import Queue
 
 WEBSOCKET_CONTROL_PORT = os.environ.get('WEBSOCKET_CONTROL_PORT', 8765)
 # WEBSOCKET_STATUS_PORT = os.environ.get('WEBSOCKET_STATUS_PORT', 8764)
 
 # global variables:
-bp = None
-busy = threading.Lock()
-start_scanning = threading.Event()
-state_update = threading.Event()
-websocket_state_update = asyncio.Event()
+bp = None  # the global reference to our blueskyplan class object that holds reference to the RunEngine
+busy = threading.Lock()  # used by the runengine to signal that its currently busy to the websocket thread
+start_scanning = threading.Event()  # used by the websocket thread to signal to the main thread that it should start a scan
+re_state_changes_q = Queue()  # used to capture RunEngine state changes so no events, even if in rapid succession, are missed
+re_state_changes_data = None  # eg.: {'new_state': 'idle', 'old_state': 'running'}
+state_update = threading.Event()  # used by the runengine to signal that its state has changed, for benefit of websocket threads
+websocket_state_update = asyncio.Event()  # the asyncio version of the threading version above, see coroutine_to_bridge_thread_events_to_asyncio()
 
 class BlueskyPlan:
 
     def __init__(self):
-        self.RE = RunEngine(context_managers=[])
+        self.RE = RunEngine(context_managers=[])  # Todo: Test if this param means threads are unnecessary?
         # passing empty array as context managers so that the run engine will
         # not try to register signal handlers or complain that its not the
         # main thread
@@ -90,7 +95,6 @@ class BlueskyPlan:
                             height=height,
                             pitch=pitch)
 
-
         # set up monitors that allow sending real-time data from the
         # slew scan to Kafka
         sd = SupplementalData()
@@ -110,37 +114,38 @@ class BlueskyPlan:
 
 def state_hook_function(new_state, old_state):
     """this function will be called from the main thread, in the
-    RunEngine code…
-    the waiting coroutine to bridge events will clear() it"""
-    state_update.set()  # this is the threading type of event
+    RunEngine code.
+    The waiting coroutine to bridge events will clear() it"""
+    # https://docs.python.org/3.6/library/queue.html
+    re_state_changes_q.put({'new_state': new_state, 'old_state': old_state})
+    # state_update.set()  # this is the threading type of event
 
 
-async def coroutine_to_bridge_thread_events_to_asyncio(loop, threading_event, asyncio_event):
-    """ The asyncio Event() primitive is NOT thread safe (according
-to the documentation), but the threading Event() primitive is blocking
-so we can't use that in any regular asyncio coroutine or else we risk
-blocking the entire asyncio event loop.
-This function serves to bridge the events between the main threading
-driven thread and the secondary asyncio driven thread by using an
-executor to get around the blocking aspects of waiting on a threading
-Event primitive and then subsequently echo that threading.Event() using
-an asyncio.Event() that any waiting open websocket connection coroutines
-might happen to be Await'ing.
+async def bridge_queue_events_to_coroutines(loop, queue, asyncio_event):
+    """This function serves to bridge the events between the main threading
+    driven thread and the secondary asyncio driven thread by using an
+    executor to get around the blocking aspects of waiting on a threading
+    Queue primitive and then subsequently echo that item using
+    an asyncio.Event() for any awaiting open websocket connection coroutines.
 
-We can do set() immediately followed by clear() when we deal with asyncio
-events, but when we're dealing with threading.Event() objects I believe
-it's safer to have the waiting threads be the ones to clear it, so that
-we can be sure that the waiting thread caught it, Otherwise I worry that a
-race condition would ensue,
-For example: The thread waiting on an event is not executed by the
-OS/hardware at the time the other thread sets and then immediately
-clears the event, by the time the thread doing the waiting is back to being
-executed by the OS/hardware it will have potentially missed the setting of
-the event it was waiting on.
-   """
+    Using a queue ensures every single RunEngine state update event is
+    accounted for and an appropriate message dispatched to any waiting
+    subscriber clients.
+
+    It is expected that the queue will remain relatively empty and
+    only during very brief moments where the RunEngine changes state in quick
+    succession would there ever be more than one event item in the queue
+
+    The state_hook function, called by the RunEngine whenever its state
+    changes, is what adds items to the queue
+    """
     while True:
-        await loop.run_in_executor(None, threading_event.wait)
-        threading_event.clear()
+        ret = await loop.run_in_executor(None, functools.partial(queue.get, block=True))
+        # (this is the only consumer of the queue)
+        global re_state_changes_data
+        print('return value from the queue: ')
+        print(ret)
+        re_state_changes_data = ret
         asyncio_event.set()
         # at this point the asyncio event loop will pass control to any
         # waiting websocket server coroutines that have subscribers so
@@ -148,6 +153,8 @@ the event it was waiting on.
         # before passing control back to this, this is why we can do set()
         # immediately followed by clear()
         asyncio_event.clear()
+        re_state_changes_data = None
+        queue.task_done()
 
 
 def websocket_thread(ready_signal=None):
@@ -176,9 +183,9 @@ def websocket_thread(ready_signal=None):
     websocket_state_update = asyncio.Event(loop=loop_for_this_thread)
     print("websocket thread: starting events bridging function")
     asyncio.ensure_future(
-        coroutine_to_bridge_thread_events_to_asyncio(
+        bridge_queue_events_to_coroutines(
             loop_for_this_thread,
-            state_update,
+            re_state_changes_q,
             websocket_state_update), loop=loop_for_this_thread)
 
     loop_for_this_thread.run_forever()
@@ -277,19 +284,26 @@ async def websocket_server(websocket, path):
             while True:
                 # then wait until the state is updated:
                 await websocket_state_update.wait()
+                assert re_state_changes_data is not None, "Alex's mental model of asyncio event loop behaviour is wrong - prerequisites not met in websocket connection that just received asyncio.Event signal regarding update to RunEngine state"
                 # then send our client an update:
                 await websocket.send(json.dumps({
                     'type': 'status',
                     'about': 'run engine state updates',
-                    'state': bp.RE.state
+                    'state': re_state_changes_data['new_state'],
+                    'old_state': re_state_changes_data['old_state']
                 }))
-
+        # Todo: add the condition if they pass type pause or abort to
+        #  enact that against the runEngine, then test that that actually
+        #  Works.
         else:
             print("websocket server: ignoring that obj, just responding with RE"
                   " state for now")
             await websocket.send(json.dumps({'runenginestate': bp.RE.state}))
         if 'keep_open' not in obj:
             break
+            # Todo: handle gracefully when ctrl-C is pressed on this server
+            #  if there are any open websocket connections (currently have to
+            #  press ctrl-C twice)
 
 if __name__ == "__main__":
     print("main thread: about to do the scan")
