@@ -37,7 +37,6 @@ projects should be the instructions around how to perform the scan/experiment.
 """
 
 from devices import RedisSlewScan, CameraDetector
-
 from bluesky.plans import count
 from bluesky.preprocessors import SupplementalData
 from ophyd.sim import det1, det2  # two simulated detectors
@@ -254,7 +253,85 @@ async def websocket_server(websocket, path):
         # confident obj is a proper object
         print("websocket server: obj:")
         print(obj)
-        if obj['type'] == 'start':
+
+        if obj['type'] == 'halt':
+            # stop a running plan, don't wait for it to clean up, mark as aborted
+            try:
+                bp.RE.halt()  # takes no args, raises runtime error/transition error    , or returns task.result()
+                await websocket.send(json.dumps({
+                    'success': True,
+                    'status': "halt requested"}))
+            except Exception as err:
+                err_repr = repr(err)
+                await websocket.send(json.dumps({
+                    'success': False,
+                    'status': "exception was raised",
+                    'exception': err_repr}))
+
+        elif obj['type'] == 'abort':
+            # stop a running plan, wait for it to cleanup, mark as aborted
+            try:
+                bp.RE.abort(reason='todo: get reason from websocket client')  # Todo
+                await websocket.send(json.dumps({
+                    'success': True,
+                    'status': "abort requested"}))
+            except Exception as err:
+                err_repr = repr(err)
+                await websocket.send(json.dumps({
+                    'success': False,
+                    'status': "exception was raised",
+                    'exception': err_repr}))
+
+        elif obj['type'] == 'stop':
+            # stop a running plan, wait for it to clean up, mark as successful
+            try:
+                bp.RE.stop()  # takes no args, returns return tuple(self._run_start_uids)
+                await websocket.send(json.dumps({
+                    'success': True,
+                    'status': "stop requested"}))
+            except Exception as err:
+                err_repr = repr(err)
+                await websocket.send(json.dumps({
+                    'success': False,
+                    'status': "exception was raised",
+                    'exception': err_repr}))
+
+        elif obj['type'] == 'pause':
+            # if checkpoints have been programmed into the plan, pause on the next checkpoint
+            # if no checkpoints, the effect becomes the same as abort
+            # this is analogous to pressing Ctrl-C during execution of a plan manually on the terminal
+            try:
+                bp.RE.request_pause()
+                await websocket.send(json.dumps({
+                    'success': True,
+                    'status': "resume requested"}))
+            except Exception as err:
+                err_repr = repr(err)
+                await websocket.send(json.dumps({
+                    'success': False,
+                    'status': "exception was raised",
+                    'exception': err_repr}))
+
+        elif obj['type'] == 'resume':
+            # resume a paused plan from the last checkpoint
+            try:
+                if bp.RE.state == 'paused':
+                    bp.RE.resume()  # takes no args
+                    await websocket.send(json.dumps({
+                        'success': True,
+                        'status': "resume requested"}))
+                else:
+                    await websocket.send(json.dumps({
+                        'success': False,
+                        'status': "cannot resume a runEngine that isn't paused"}))
+            except Exception as err:
+                err_repr = repr(err)
+                await websocket.send(json.dumps({
+                    'success': False,
+                    'status': "exception was raised",
+                    'exception': err_repr}))
+
+        elif obj['type'] == 'start':
             if busy.locked():
                 # don't attempt to initiate another scan as one is already in
                 # progress as evidenced by the busy Lock
@@ -273,6 +350,7 @@ async def websocket_server(websocket, path):
                 await websocket.send(json.dumps({
                     'success': True,
                     'status': 'Signalling main thread to start a new scan'}))
+
         elif obj['type'] == 'subscribe':
             # if client wants to subscribe to runengine state updates,
             # send them an initial message containing the current state
@@ -292,18 +370,17 @@ async def websocket_server(websocket, path):
                     'state': re_state_changes_data['new_state'],
                     'old_state': re_state_changes_data['old_state']
                 }))
-        # Todo: add the condition if they pass type pause or abort to
-        #  enact that against the runEngine, then test that that actually
-        #  Works.
+
         else:
             print("websocket server: ignoring that obj, just responding with RE"
                   " state for now")
             await websocket.send(json.dumps({'runenginestate': bp.RE.state}))
+
         if 'keep_open' not in obj:
             break
-            # Todo: handle gracefully when ctrl-C is pressed on this server
-            #  if there are any open websocket connections (currently have to
-            #  press ctrl-C twice)
+        # Todo: handle gracefully when ctrl-C is pressed on this server
+        #  if there are any open websocket connections (currently have to
+        #  press ctrl-C twice)
 
 if __name__ == "__main__":
     print("main thread: about to do the scan")
