@@ -19,7 +19,8 @@ async def test_starting_plan():
         if use_real_helical_scan_plan_make_hardware_move:
             plan = "helical scan"  # this corresponds with expected label on websocket server in bluesky_plan.py
 
-        payload = {"type": "start", "plan": plan}
+        # payload = {"type": "start", "plan": plan}
+        payload = {"type": "start", "plan": plan, "params": {"example_param_1": 3, "example_param_2": 4}}
         await websocket.send(json.dumps(payload))
         response = await websocket.recv()
         print(f'I\'m the websocket client and I got this response: {response}')

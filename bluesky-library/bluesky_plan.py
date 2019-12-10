@@ -67,17 +67,37 @@ websocket_state_update = asyncio.Event()  # the asyncio version of the threading
 class BlueskyPlan:
 
     def __init__(self):
-        self.RE = RunEngine(context_managers=[])  # Todo: Test if this param means threads are unnecessary?
+        self.RE = RunEngine(context_managers=[])
         # passing empty array as context managers so that the run engine will
         # not try to register signal handlers or complain that its not the
         # main thread
         self.selected_scan = self.do_fake_helical_scan
+        self.supplied_params = None
 
-    def do_fake_helical_scan(self):
+    def do_fake_helical_scan(self, example_param_1=None, example_param_2=None):
+        if example_param_1 is None and example_param_2 is None:
+            print("simulation (fake) scan: No supplied parameters, running with my defaults")
+        else:
+            print("simulation (fake) scan: got these parameters (which I'm just going to ignore since I'm the fake simulated scan)")
+            print(f'simulation (fake) scan: example_param_1: {example_param_1}')
+            print(f'simulation (fake) scan: example_param_2: {example_param_2}')
         self.RE(count([det1, det2]))
         time.sleep(10)  # because hard to test accompanying threads when this
         # ends in a couple ms due to simulated detectors not simulating much
         print("scan finished ( in do_fake_helical_scan )")
+        """
+        This function can be invoked by a websocket client passing the below:
+        {
+            'type': 'start',
+            'plan': 'simulated',
+            'params': {
+                'example_param_1': 12,
+                'example_param_2': 24
+            }
+        }
+        Their supplied 'params' object will be loaded into this class'
+        supplied_params property before this function will be called.
+        """
 
     def do_helical_scan(self,
                         start_y=10,
@@ -344,12 +364,17 @@ async def websocket_server(websocket, path):
                     bp.selected_scan = bp.do_fake_helical_scan
                 if obj['plan'] == 'helical scan':
                     bp.selected_scan = bp.do_helical_scan
+                # pull out any supplied parameters:
+                response = {
+                    'success': True,
+                    'status': 'Signalling main thread to start a new scan'}
+                if 'params' in obj:
+                    bp.supplied_params = obj['params']
+                    response['params'] = obj['params']
                 # initiate a scan by setting an event object that the main
                 # thread is waiting on before proceeding with scan
                 start_scanning.set()
-                await websocket.send(json.dumps({
-                    'success': True,
-                    'status': 'Signalling main thread to start a new scan'}))
+                await websocket.send(json.dumps(response))
 
         elif obj['type'] == 'subscribe':
             # if client wants to subscribe to runengine state updates,
@@ -419,5 +444,9 @@ if __name__ == "__main__":
         start_scanning.wait()
         busy.acquire()
         start_scanning.clear()
-        bp.selected_scan()
+        if bp.supplied_params is not None:
+            bp.selected_scan(**bp.supplied_params)  # this relies on the supplied_params being set before this line is called, and being appropriately unset afterwards.
+        else:  # because if supplied_params was None we'd be going bp.selected_scan(**None) which gives TypeError arg after ** must be a mapping
+            bp.selected_scan()
+        bp.supplied_params = None
         busy.release()

@@ -90,10 +90,10 @@ def notify_coroutines(event_type):
     state.update_event_object.clear()
 
 
-async def start_scan(scan_name):
+async def start_scan(scan_name, params=None):
     # uri = "ws://localhost:8765"  # this needs to change to bluesky
     async with websockets.connect(BLUESKY_WEBSOCKET) as websocket:
-        payload = {"type": "start", "plan": scan_name}
+        payload = {"type": "start", "plan": scan_name, "params": params}
         await websocket.send(json.dumps(payload))
         response = await websocket.recv()
         await websocket.close(reason="will create a new connection if I need to")
@@ -127,6 +127,13 @@ class ScanParams(BaseModel):
     # param2: int
 
 
+class HelicalParams(BaseModel):
+    start_y: int = 10
+    height: int = 10
+    pitch: int = 2
+    restful_host: str = 'http://camera-server:8000'
+    websocket_url: str = 'ws://camera-server:8000/ws'
+
 ################################################################################
 ##########################    FastAPI endpoints:    ############################
 
@@ -139,7 +146,7 @@ def root_endpoint_diagnostics():
 async def run_a_simulated_scan():
     # THE FAKE ONE!
     # establish a new websocket connection to the bluesky websocket server
-    result = await start_scan("simulated")
+    result = await start_scan("simulated", {'example_param_1': 1, 'example_param_2': 2})
     # send a websocket message to the bluesky websocket server
     # message: {'type': 'start', 'plan': 'simulated'}
     # receive response from websocket server, expecting either resp['success'] True or False and corresponding resp['status'] message/reason.
@@ -151,7 +158,14 @@ async def run_a_simulated_scan():
 @app.get("/testhelicalscan")
 async def run_the_real_helical_scan_in_the_lab():
     # establish a new websocket connection to the bluesky websocket server
-    result = await start_scan("helical scan")
+    helical_scans_default_params = {
+        'start_y': 10,
+        'height': 10,
+        'pitch': 2,
+        'restful_host': 'http://camera-server:8000',
+        'websocket_url': 'ws://camera-server:8000/ws'
+    }
+    result = await start_scan("helical scan", helical_scans_default_params)  # if params were none then scan will run with the defaults
     # send a websocket message to the bluesky websocket server
     # message: {'type': 'start', 'plan': 'helical scan'}
     # receive response from websocket server, expecting either resp['success'] True or False and corresponding resp['status'] message/reason.
