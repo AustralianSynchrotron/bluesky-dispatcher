@@ -159,8 +159,11 @@ def root_endpoint_diagnostics():
 
 
 @app.post("/testfakehelicalscan")
-async def run_a_simulated_scan(s_params: FakeScanParams):
+async def run_a_simulated_scan(s_params: FakeScanParams, response: Response):
     # THE FAKE ONE!
+    if state.busy:
+        response.status_code = HTTP_409_CONFLICT
+        return {"sorry": "currently busy with a previous scan"}
     # establish a new websocket connection to the bluesky websocket server
     # print(type(s_params))
     # print(type(json.loads(s_params)))
@@ -175,8 +178,12 @@ async def run_a_simulated_scan(s_params: FakeScanParams):
 
 
 @app.post("/testhelicalscan")
-async def run_the_real_helical_scan_in_the_lab(s_params: HelicalParams):
+async def run_the_real_helical_scan_in_the_lab(s_params: HelicalParams, response: Response):
     # establish a new websocket connection to the bluesky websocket server
+    if state.busy:
+        response.status_code = HTTP_409_CONFLICT
+        return {"sorry": "currently busy with a previous scan"}
+
     helical_scans_default_params = {
         'start_y': 10,
         'height': 10,
@@ -193,20 +200,20 @@ async def run_the_real_helical_scan_in_the_lab(s_params: HelicalParams):
     return result
 
 
-@app.post("/startscan")
-async def startscan(s_params: ScanParams, response: Response):
-    print("Helical scan starting")
-    print(s_params)
-    if state.busy:
-        response.status_code = HTTP_409_CONFLICT
-        return {"sorry": "currently busy with a previous scan"}
-    state.busy = True
-    await notify_coroutines("busy")
-    state.result = None
-    state.update_event_params = s_params
-    await notify_coroutines("start_scan")
-    # do_scan(RE)
-    return {"confirm": "scan starting, currently ignoring your params though"}
+# @app.post("/startscan")
+# async def startscan(s_params: ScanParams, response: Response):
+#     print("Helical scan starting")
+#     print(s_params)
+#     if state.busy:
+#         response.status_code = HTTP_409_CONFLICT
+#         return {"sorry": "currently busy with a previous scan"}
+#     state.busy = True
+#     await notify_coroutines("busy")
+#     state.result = None
+#     state.update_event_params = s_params
+#     await notify_coroutines("start_scan")
+#     # do_scan(RE)
+#     return {"confirm": "scan starting, currently ignoring your params though"}
 
 
 @app.websocket("/ws")
