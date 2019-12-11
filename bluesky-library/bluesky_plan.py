@@ -355,7 +355,7 @@ async def websocket_server(websocket, path):
                 bp.RE.request_pause()
                 await websocket.send(json.dumps({
                     'success': True,
-                    'status': "resume requested"}))
+                    'status': "pause requested"}))
             except Exception as err:
                 err_repr = repr(err)
                 await websocket.send(json.dumps({

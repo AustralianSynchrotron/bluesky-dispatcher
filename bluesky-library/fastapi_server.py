@@ -112,6 +112,16 @@ async def start_scan(scan_name, params=None):
     return {'status': 'error', 'msg': 'something went wrong in the websocket call to the bluesky service'}
 
 
+async def pause_scan():
+    # uri = "ws://localhost:8765"  # this needs to change to bluesky
+    async with websockets.connect(BLUESKY_WEBSOCKET) as websocket:
+        payload = {"type": "pause"}
+        await websocket.send(json.dumps(payload))
+        response = await websocket.recv()
+        await websocket.close(reason="will create a new connection if I need to")
+        return json.loads(response)  # todo: this is at risk if the response ISN"T valid json but since we also authored the code sending the response back chances are it will be fine
+    return {'status': 'error', 'msg': 'something went wrong in the websocket call to the bluesky service'}
+
 ################################################################################
 ##################    Start of our FastAPI implementation:    ##################
 app = FastAPI(openapi_prefix=OPENAPI_PREFIX)
@@ -159,8 +169,12 @@ def root_endpoint_diagnostics():
 
 
 @app.post("/pausescan")
-def pause_any_currently_underway_scan():
-    return {"confirm": "request to pause scan received"}
+async def pause_any_currently_underway_scan():
+    if state.busy:
+        result = await pause_scan()
+        return result
+    else:
+        return {"sorry": "No scan is currently running to be paused"}
 
 
 @app.post("/testfakehelicalscan")
