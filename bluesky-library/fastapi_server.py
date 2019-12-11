@@ -158,6 +158,11 @@ def root_endpoint_diagnostics():
     return {"Helical": "Scan", "About": "This is the backend for the frontend (BFF) for the helical scan demo - see the /docs endpoint", "busy scanning": state.busy}
 
 
+@app.post("/pausescan")
+def pause_any_currently_underway_scan():
+    return {"confirm": "request to pause scan received"}
+
+
 @app.post("/testfakehelicalscan")
 async def run_a_simulated_scan(s_params: FakeScanParams, response: Response):
     # THE FAKE ONE!
