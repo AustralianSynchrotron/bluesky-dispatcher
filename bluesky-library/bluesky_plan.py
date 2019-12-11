@@ -64,6 +64,16 @@ re_state_changes_data = None  # eg.: {'new_state': 'idle', 'old_state': 'running
 state_update = threading.Event()  # used by the runengine to signal that its state has changed, for benefit of websocket threads
 websocket_state_update = asyncio.Event()  # the asyncio version of the threading version above, see coroutine_to_bridge_thread_events_to_asyncio()
 
+
+def state_hook_function(new_state, old_state):
+    """this function will be called from the main thread, in the
+    RunEngine code.
+    The waiting coroutine to bridge events will clear() it"""
+    # https://docs.python.org/3.6/library/queue.html
+    re_state_changes_q.put({'new_state': new_state, 'old_state': old_state})
+    # state_update.set()  # this is the threading type of event
+
+
 class BlueskyPlan:
 
     def __init__(self):
@@ -82,8 +92,20 @@ class BlueskyPlan:
             print(f'simulation (fake) scan: example_param_1: {example_param_1}')
             print(f'simulation (fake) scan: example_param_2: {example_param_2}')
         self.RE(count([det1, det2]))
+
+        state_hook_function("running", "idle")  # because the above finished
+        # so quickly, it doesn't look like much happens on the end users web
+        # GUI, this is just to simulate the RunEngine entering another
+        # "running" state so that when we're sleeping for 10 seconds the
+        # button in the GUI is also showing that it's
+        # currently *air quotes* Scanning...
+
         time.sleep(10)  # because hard to test accompanying threads when this
         # ends in a couple ms due to simulated detectors not simulating much
+
+        state_hook_function("idle", "running")  # undo our artificial state
+        # update, now we're back in line with the actual RunEngine state.
+
         print("scan finished ( in do_fake_helical_scan )")
         """
         This function can be invoked by a websocket client passing the below:
@@ -131,13 +153,9 @@ class BlueskyPlan:
         print("scan finished ( in do_helical_scan )")
 
 
-def state_hook_function(new_state, old_state):
-    """this function will be called from the main thread, in the
-    RunEngine code.
-    The waiting coroutine to bridge events will clear() it"""
-    # https://docs.python.org/3.6/library/queue.html
-    re_state_changes_q.put({'new_state': new_state, 'old_state': old_state})
-    # state_update.set()  # this is the threading type of event
+async def yield_control_back_to_event_loop():
+    await asyncio.sleep(0)
+    # https://github.com/python/asyncio/issues/284
 
 
 async def bridge_queue_events_to_coroutines(loop, queue, asyncio_event):
@@ -165,13 +183,26 @@ async def bridge_queue_events_to_coroutines(loop, queue, asyncio_event):
         print('return value from the queue: ')
         print(ret)
         re_state_changes_data = ret
+
         asyncio_event.set()
-        # at this point the asyncio event loop will pass control to any
-        # waiting websocket server coroutines that have subscribers so
-        # they can update their subscribers on the latest RunEngine state
-        # before passing control back to this, this is why we can do set()
-        # immediately followed by clear()
+        # at this point any websocket connection coroutines that were
+        # shelved out of the event loop awaiting this asyncio_event
+        # will be scheduled back into the event loop. and continue
+        # execution after their await event.wait() line.
+
         asyncio_event.clear()
+        # it's ok to immediately reset the Event, any coroutines that
+        # were waiting on it will still be run once this coroutine yields
+        # control back to the event loop via an await or completion, it
+        # just means that if they hit another line (or the same line)
+        # that makes them await it they will again be shelved out of
+        # the event loop until it is once again set().
+
+        await yield_control_back_to_event_loop()
+        # deliberately pass control back to the event loop so that the
+        # coroutines that are now back in the loop can run before we
+        # reset the global variable they will be referring to.
+
         re_state_changes_data = None
         queue.task_done()
 
@@ -369,7 +400,7 @@ async def websocket_server(websocket, path):
                     'success': True,
                     'status': 'Signalling main thread to start a new scan'}
                 if 'params' in obj:
-                    bp.supplied_params = obj['params']
+                    bp.supplied_params = json.loads(obj['params'])
                     response['params'] = obj['params']
                 # initiate a scan by setting an event object that the main
                 # thread is waiting on before proceeding with scan

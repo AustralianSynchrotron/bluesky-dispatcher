@@ -79,15 +79,26 @@ state.result = None
                                 # accepted json document request bodies.)
 
 
-def notify_coroutines(event_type):
+async def yield_control_back_to_event_loop():
+    await asyncio.sleep(0)
+    # https://github.com/python/asyncio/issues/284
+
+
+async def notify_coroutines(event_type):
     """This function is to simplify the process of notifying coroutines of some
     event they may be waiting on and helps this file adhere to the DRY
     principle.
     """
     state.update_event_type = event_type
     state.update_event_object.set()
-    # Any coroutines await'ing this update_event_object are ran now.
     state.update_event_object.clear()
+    # Any coroutines await'ing this update_event_object will now be back in
+    # the event loop. (execution will pass to them at some time after the
+    # current coroutine awaits or ends)
+
+    await yield_control_back_to_event_loop()
+    # pass control back to the event loop so those waiting coroutines can
+    # have a chance to execute before we do anything else.
 
 
 async def start_scan(scan_name, params=None):
@@ -127,6 +138,11 @@ class ScanParams(BaseModel):
     # param2: int
 
 
+class FakeScanParams(BaseModel):
+    example_param_1: int
+    example_param_2: int
+
+
 class HelicalParams(BaseModel):
     start_y: int = 10
     height: int = 10
@@ -142,11 +158,14 @@ def root_endpoint_diagnostics():
     return {"Helical": "Scan", "About": "This is the backend for the frontend (BFF) for the helical scan demo - see the /docs endpoint", "busy scanning": state.busy}
 
 
-@app.get("/testfakehelicalscan")
-async def run_a_simulated_scan():
+@app.post("/testfakehelicalscan")
+async def run_a_simulated_scan(s_params: FakeScanParams):
     # THE FAKE ONE!
     # establish a new websocket connection to the bluesky websocket server
-    result = await start_scan("simulated", {'example_param_1': 1, 'example_param_2': 2})
+    # print(type(s_params))
+    # print(type(json.loads(s_params)))
+    # print(type(json.dumps(s_params)))
+    result = await start_scan("simulated", s_params.json())
     # send a websocket message to the bluesky websocket server
     # message: {'type': 'start', 'plan': 'simulated'}
     # receive response from websocket server, expecting either resp['success'] True or False and corresponding resp['status'] message/reason.
@@ -155,8 +174,8 @@ async def run_a_simulated_scan():
     return result
 
 
-@app.get("/testhelicalscan")
-async def run_the_real_helical_scan_in_the_lab():
+@app.post("/testhelicalscan")
+async def run_the_real_helical_scan_in_the_lab(s_params: HelicalParams):
     # establish a new websocket connection to the bluesky websocket server
     helical_scans_default_params = {
         'start_y': 10,
@@ -165,7 +184,7 @@ async def run_the_real_helical_scan_in_the_lab():
         'restful_host': 'http://camera-server:8000',
         'websocket_url': 'ws://camera-server:8000/ws'
     }
-    result = await start_scan("helical scan", helical_scans_default_params)  # if params were none then scan will run with the defaults
+    result = await start_scan("helical scan", s_params.json())  # if params were none then scan will run with the defaults
     # send a websocket message to the bluesky websocket server
     # message: {'type': 'start', 'plan': 'helical scan'}
     # receive response from websocket server, expecting either resp['success'] True or False and corresponding resp['status'] message/reason.
@@ -175,17 +194,17 @@ async def run_the_real_helical_scan_in_the_lab():
 
 
 @app.post("/startscan")
-def startscan(s_params: ScanParams, response: Response):
+async def startscan(s_params: ScanParams, response: Response):
     print("Helical scan starting")
     print(s_params)
     if state.busy:
         response.status_code = HTTP_409_CONFLICT
         return {"sorry": "currently busy with a previous scan"}
     state.busy = True
-    notify_coroutines("busy")
+    await notify_coroutines("busy")
     state.result = None
     state.update_event_params = s_params
-    notify_coroutines("start_scan")
+    await notify_coroutines("start_scan")
     # do_scan(RE)
     return {"confirm": "scan starting, currently ignoring your params though"}
 
@@ -199,6 +218,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # state.update_event_object:
     while True:
         await state.update_event_object.wait()
+        print(f'websocket coroutine: just woke up! {repr(asyncio.Task.current_task())}')
         if state.update_event_type == "busy":
             await websocket.send_json({'busy': state.busy})
         if state.update_event_type == "shutdown":
@@ -211,38 +231,47 @@ async def websocket_endpoint(websocket: WebSocket):
 #######    background task to run concurrently with fastapi server    ##########
 
 
-async def background_task():
-    print("background task starting")
-    while True:
-        await state.update_event_object.wait()
-        if state.update_event_type == "start_scan":
-            # loop = asyncio.get_event_loop()
-            # grab the event loop from the reference stored in our 'state' object in attempt to fix
-            # "There is no current event loop in thread" issue we're seeing in prod
-            # https://stackoverflow.com/questions/46727787/runtimeerror-there-is-no-current-event-loop-in-thread-in-async-apscheduler#56580615
+async def bluesky_telemetry_task():
+    """Basically this is the connection between this api and the bluesky
+    dispatcher service so that this api can know whether the bluesky
+    RunEngine is currently idle and ready to run a plan or busy with
+    a current plan, and by proxy, so can our connected web browser clients."""
+    print("bluesky_telemetry_task starting")
 
-            # state.result = await state.event_loop.run_in_executor(None, do_scan, state.event_loop)
+    async with websockets.connect(BLUESKY_WEBSOCKET) as websocket:
+        await websocket.send(json.dumps({"type": "subscribe"}))
+        initial_response = await websocket.recv()
+        print(f'telemetry task: got this initial response: {initial_response}')
+        # initial_response will be received almost immediately and serves to update us
+        # on what the CURRENT state of the RunEngine is.
+        re_state = json.loads(initial_response)['state']
+        print(f'telemetry task: re_state: {re_state}')
+        if re_state == 'running':
+            state.busy = True
+            print('telemetry task: Just set busy as True, now notifying coroutines')
+            await notify_coroutines("busy")
+            print('telemetry task: DONE notifying coroutines')
+        elif re_state == 'idle':
+            state.busy = False
+            print('telemetry task: Just set busy as True, now notifying coroutines')
+            await notify_coroutines("busy")
+            print('telemetry task: DONE notifying coroutines')
 
-
-            #
-            """this didn't work as expected but did produce a helpful error message"""
-            # def worker():
-            #     do_scan()
-            #
-            # thread = Thread(target=worker, args=())
-            # thread.daemon = False
-            # thread.start()
-            #
-            """try with subprocess instead"""
-            # subprocess.call(['python3', '/bluesky/bluesky_plan.py'])  # this line is tested and works, but blocks!
-            # subprocess.check_output('python /home/alex/apps/bright-sac-2019/bluesky-library/subprocesstest.py', shell=True)
-            """try with os.spawn"""
-            # WARNING THIS IS VERY BAD CODE BUT ITS THE FIRST EXAMPLE THAT WORKS FROM
-            # THE PRESS OF THE BUTTON ON THE WEB GUI
-            C = ['python3', '/bluesky/bluesky_plan.py'] # THIS PATH IS SPECIFIC TO THE CONTAINER
-            os.spawnvpe(os.P_NOWAIT, 'python3', C, os.environ)
-            # state.busy = False
-            # notify_coroutines("busy")
+        while True:
+            an_update = await websocket.recv()
+            print(f'telemetry task: received an update: {an_update}')
+            re_state = json.loads(an_update)['state']
+            print(f'telemetry task: re_state: {re_state}')
+            if re_state == 'idle':
+                print('telemetry task: Just set busy as False, now notifying coroutines')
+                state.busy = False
+                await notify_coroutines("busy")
+                print('telemetry task: DONE notifying coroutines')
+            if re_state == 'running':
+                state.busy = True
+                print('telemetry task: Just set busy as False, now notifying coroutines')
+                await notify_coroutines("busy")
+                print('telemetry task: DONE notifying coroutines')
 
 
 ################################################################################
@@ -250,7 +279,8 @@ async def background_task():
 
 
 def exit_gracefully(*args, **kwargs):
-    notify_coroutines('shutdown')
+    state.update_event_type = 'shutdown'
+    state.update_event_object.set()
 
 
 @app.on_event("startup")
@@ -276,7 +306,7 @@ state.update_event_object = asyncio.Event(loop=asyncio.get_event_loop())
 # to make use of such result would mean you would have to 'await'
 # the task variable. Admittedly this is a hacky attempt at fixing
 # https://stackoverflow.com/questions/46890646/asyncio-weirdness-of-task-exception-was-never-retrieved
-task = asyncio.ensure_future(background_task())
+task = asyncio.ensure_future(bluesky_telemetry_task())
 # Link to the code used as inspiration for this trick (I didn't know you
 # could just do .create_task (or ensure_future in python 3.6), I thought
 # you would need to get a hold of
