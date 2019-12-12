@@ -85,12 +85,17 @@ class BlueskyPlan:
         self.supplied_params = None
 
     def do_fake_helical_scan(self, example_param_1=None, example_param_2=None):
+
         if example_param_1 is None and example_param_2 is None:
             print("simulation (fake) scan: No supplied parameters, running with my defaults")
-        else:
-            print("simulation (fake) scan: got these parameters (which I'm just going to ignore since I'm the fake simulated scan)")
-            print(f'simulation (fake) scan: example_param_1: {example_param_1}')
-            print(f'simulation (fake) scan: example_param_2: {example_param_2}')
+
+        # print a message to aid diagnostics:
+        timestamp_str = time.strftime("%d.%b %Y %H:%M:%S")
+        print(f'{timestamp_str}:  running FAKE helical scan with '
+              f'the following params: '
+              f'example_param_1:{example_param_1}, '
+              f'example_param_2:{example_param_2}')
+
         self.RE(count([det1, det2]))
 
         state_hook_function("running", "idle")  # because the above finished
@@ -127,6 +132,13 @@ class BlueskyPlan:
                         pitch=2,
                         restful_host='http://camera-server:8000',
                         websocket_url='ws://camera-server:8000/ws'):
+
+        # print a message to aid diagnostics:
+        timestamp_str = time.strftime("%d.%b %Y %H:%M:%S")
+        print(f'{timestamp_str}:  running helical scan with the following'
+              f' params: start_y:{start_y}, height:{height}, pitch:{pitch},'
+              f' restful_host:{restful_host}, websocket_url:{websocket_url}')
+
         # create signals (aka devices)
         camera = CameraDetector(name='camera',
                                 restful_host=restful_host,
