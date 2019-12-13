@@ -1,6 +1,6 @@
 """
-This is the bluesky service that gives interactivity via websockets to the
-python script that runs a bluesky plan.
+This is the bluesky dispatcher service that gives interactivity via websockets
+to the python script that runs a bluesky plan.
 
 This is comprised of two distinct threads
 
@@ -53,25 +53,37 @@ import functools  # necessary for https://docs.python.org/3.6/library/asyncio-ev
 from queue import Queue
 
 WEBSOCKET_CONTROL_PORT = os.environ.get('WEBSOCKET_CONTROL_PORT', 8765)
-# WEBSOCKET_STATUS_PORT = os.environ.get('WEBSOCKET_STATUS_PORT', 8764)
 
 # global variables:
-bp = None  # the global reference to our blueskyplan class object that holds reference to the RunEngine
-busy = threading.Lock()  # used by the runengine to signal that its currently busy to the websocket thread
-start_scanning = threading.Event()  # used by the websocket thread to signal to the main thread that it should start a scan
-re_state_changes_q = Queue()  # used to capture RunEngine state changes so no events, even if in rapid succession, are missed
-re_state_changes_data = None  # eg.: {'new_state': 'idle', 'old_state': 'running'}
-state_update = threading.Event()  # used by the runengine to signal that its state has changed, for benefit of websocket threads
-websocket_state_update = asyncio.Event()  # the asyncio version of the threading version above, see coroutine_to_bridge_thread_events_to_asyncio()
+
+bp = None
+# The global reference to our blueskyplan class object that holds reference to the RunEngine
+
+busy = threading.Lock()
+# Used by the runengine to signal that its currently busy to the websocket thread
+
+start_scanning = threading.Event()
+# Used by the websocket thread to signal the main thread that it should start
+# a scan. Which scan to be run should be selected before set()'ing this event.
+
+re_state_changes_q = Queue()
+# Used to capture RunEngine state changes so no events, even if in rapid succession, are missed
+
+re_state_changes_data = None
+# used to hold the information provided by the runEngine whenever its state changes
+# so that its accessible to websocket connections serving 'subscribers'
+# eg.: {'new_state': 'idle', 'old_state': 'running'}
+
+websocket_state_update = asyncio.Event()
+# the Event that listened for by websocket connections and emitted by coroutine_to_bridge_thread_events_to_asyncio()
 
 
 def state_hook_function(new_state, old_state):
     """this function will be called from the main thread, in the
     RunEngine code.
-    The waiting coroutine to bridge events will clear() it"""
+    """
     # https://docs.python.org/3.6/library/queue.html
     re_state_changes_q.put({'new_state': new_state, 'old_state': old_state})
-    # state_update.set()  # this is the threading type of event
 
 
 class BlueskyPlan:
@@ -200,7 +212,7 @@ async def bridge_queue_events_to_coroutines(loop, queue, asyncio_event):
         # at this point any websocket connection coroutines that were
         # shelved out of the event loop awaiting this asyncio_event
         # will be scheduled back into the event loop. and continue
-        # execution after their await event.wait() line.
+        # execution after their `await event.wait()` line.
 
         asyncio_event.clear()
         # it's ok to immediately reset the Event, any coroutines that

@@ -188,6 +188,9 @@ async def run_a_simulated_scan(s_params: FakeScanParams, response: Response):
     # print(type(json.loads(s_params)))
     # print(type(json.dumps(s_params)))
     result = await start_scan("simulated", s_params.json())
+    # Todo: Suspect that this is sending params as a string, and not a json
+    #  object. different to how they are being sent by the
+    #  websocket_client_test.py for example
     # send a websocket message to the bluesky websocket server
     # message: {'type': 'start', 'plan': 'simulated'}
     # receive response from websocket server, expecting either resp['success'] True or False and corresponding resp['status'] message/reason.
