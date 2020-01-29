@@ -194,9 +194,23 @@ class BlueskyDispatcher:
 
         while True:
             self._start_scanning.wait()
-            self._busy.acquire()  # Todo: should this be locked by the
-                                  #  websocket thread that was first to get
-                                  #  this thread started?
+
+            # we don't acquire the self._busy lock here but instead rely on the
+            # websocket thread coroutine that called _start_scanning.set() to
+            # acquire it on behalf of this code, because the coroutine that
+            # called self._start_scanning.set() is guaranteed to run
+            # sequentially to a competing coroutine that might try to do the
+            # same thing with a different plan, due to the nature of the
+            # asyncio event loop. However if left up to this code to acquire the
+            # lock, this code runs in a separate thread to the coroutines and
+            # so the risk is that multiple coroutines (running in their own
+            # thread) both attempt to set the parameters for the next scan and
+            # respond to their respective websocket clients with success
+            # messages, yet this thread had not executed anything yet and so you
+            # have multiple websocket coroutines attempt to initiate plans
+            # before this code (which is in a separate thread to the websockets
+            # thread) had a chance to acquire the busy lock.
+
             self._start_scanning.clear()
             scan_func = self._scan_functions[self._selected_scan]
             if self._supplied_params is not None:
@@ -521,19 +535,30 @@ class BlueskyDispatcher:
 
                     self._selected_scan = obj['plan']
 
+                    # Pre-emptively set a lock here on behalf of the 'main'
+                    # thread to ensure that once we .set() the
+                    # self._start_scanning event object the busy flag is
+                    # already appropriately set, doing it here ensures that
+                    # once we respond to our respective websocket client and
+                    # relinquish control back to the event loop, that there
+                    # is no chance that a competing websocket coroutine can
+                    # come in and attempt to do the same thing before the
+                    # 'main' thread had even had a chance to get started yet
+                    # (because remember it's a separate thread so the order
+                    # of execution between this thread and that is
+                    # non-deterministic), the competing websocket coroutine will
+                    # already see that the busy flag is set and so not
+                    # attempt to modify the class instance variables (such as
+                    # self._selected_scan and self._supplied_params,
+                    # etc.) while the 'main' thread is starting to get
+                    # started on executing the plan.
+                    self._busy.acquire()
+
                     # initiate a scan by setting an event object that the main
                     # thread is waiting on before it proceeds to run whichever
                     # function is referenced now by self._selected_scan and
                     # the corresponding value in self.scan_functions
-
                     self._start_scanning.set()
-                    # Todo: May want to set a lock here to ensure that once
-                    #  this point is reached, but before the next line where
-                    #  we risk control jumping to a competing websocket
-                    #  coroutine at this same place in its execution, that we
-                    #  don't have the later one modifying class instance
-                    #  variables while the main thread is starting to get
-                    #  started on executing the plan.
                     await websocket.send(json.dumps(response))
 
             elif obj['type'] == 'state':
