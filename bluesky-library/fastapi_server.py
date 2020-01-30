@@ -63,8 +63,6 @@ state.update_event_type = None
 # action on the update_event_object to give the coroutines that were waiting
 # on that some context to inform their actions.
 
-state.event_loop = None
-
 # initial state (this is the source of truth):
 # following information is shared with frontends and clients
 state.busy = False
@@ -302,34 +300,27 @@ async def service_startup():
     # shutdown
     signal.signal(signal.SIGINT, exit_gracefully)
     signal.signal(signal.SIGTERM, exit_gracefully)
-    # establish a run engine
-    from bluesky import RunEngine
-    RE = RunEngine()
+
+    # initialise the event_object used between coroutines to signal events:
+    state.update_event_object = asyncio.Event(loop=asyncio.get_event_loop())
+
+    # Start the background task and store the asyncio TASK object in a
+    # task variable so as to capture any returned results or exceptions
+    # to make use of such result would mean you would have to 'await'
+    # the task variable. Admittedly this is a hacky attempt at fixing
+    # https://stackoverflow.com/questions/46890646/asyncio-weirdness-of-task-exception-was-never-retrieved
+    print("ensuring future bluesky_telemetry_task")
+    task = asyncio.ensure_future(bluesky_telemetry_task())
+    # Link to the code used as inspiration for this trick (I didn't know you
+    # could just do .create_task (or ensure_future in python 3.6), I thought
+    # you would need to get a hold of
+    # the event loop or something and use something like .gather or something!
+    # https://github.com/tiangolo/fastapi/issues/617
+    # The `@app.on_event("startup")` decorator was inappropriate for starting
+    # our simulate_data_gathering coroutine because the actual fastAPI server
+    # will not start until this is complete, but `while True` loop ensures it
+    # never completes.
 
 
-# store a reference to the running event loop in the state object so that we
-# can refer to it later, I didn't think this would be necessary but tried
-# this in an attempt to fix a "There is no current event loop in thread" problem
-# Todo: confirm this is necessary and remove if not, might be vestigial code
-#  from when attempts were made to run the bluesky RunEngine within the same
-#  script
-state.event_loop = asyncio.get_event_loop()
 
-# initialise the event_object used between coroutines to signal events:
-state.update_event_object = asyncio.Event(loop=asyncio.get_event_loop())
 
-# Start the background task and store the asyncio TASK object in a
-# task variable so as to capture any returned results or exceptions
-# to make use of such result would mean you would have to 'await'
-# the task variable. Admittedly this is a hacky attempt at fixing
-# https://stackoverflow.com/questions/46890646/asyncio-weirdness-of-task-exception-was-never-retrieved
-task = asyncio.ensure_future(bluesky_telemetry_task())
-# Link to the code used as inspiration for this trick (I didn't know you
-# could just do .create_task (or ensure_future in python 3.6), I thought
-# you would need to get a hold of
-# the event loop or something and use something like .gather or something!
-# https://github.com/tiangolo/fastapi/issues/617
-# The `@app.on_event("startup")` decorator was inappropriate for starting
-# our simulate_data_gathering coroutine because the actual fastAPI server
-# will not start until this is complete, but `while True` loop ensures it
-# never completes.
