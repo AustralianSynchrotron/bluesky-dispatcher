@@ -94,6 +94,8 @@ async def notify_coroutines(event_type):
 
 async def start_scan(scan_name, params=None):
     # uri = "ws://localhost:8765"  # this needs to change to bluesky
+    print(f'fastapi: making a websocket connection to bluesky ('
+          f'{BLUESKY_WEBSOCKET}) to send job')
     async with websockets.connect(BLUESKY_WEBSOCKET) as websocket:
         payload = {"type": "start", "plan": scan_name, "params": params}
         await websocket.send(json.dumps(payload))
@@ -243,47 +245,64 @@ async def bluesky_telemetry_task():
     dispatcher service so that this api can know whether the bluesky
     RunEngine is currently idle and ready to run a plan or busy with
     a current plan, and by proxy, so can our connected web browser clients."""
-    print('bluesky_telemetry_task starting')
+    print(f'bluesky_telemetry_task starting - connecting to'
+          f' {BLUESKY_WEBSOCKET}')
+    while True:
+        print("attempting to connect.")
+        while True:  # wait for good connection before proceeding
+            try:
+                async with websockets.connect(BLUESKY_WEBSOCKET) as testsocket:
+                    break  # this is where we break out of this inner while true
+            except ConnectionError:
+                print("unable to connect, will retry in 1 second")
+                await asyncio.sleep(1)
+        try:
+            async with websockets.connect(BLUESKY_WEBSOCKET) as websocket:
+                await websocket.send(json.dumps({'type': 'subscribe'}))
+                initial_response = await websocket.recv()
+                print(f'telemetry task: got this initial response: '
+                      f'{initial_response}')
+                # initial_response will be received almost immediately and serves to
+                # update us on what the CURRENT state of the RunEngine is.
+                re_state = json.loads(initial_response)['state']
+                print(f'telemetry task: re_state: {re_state}')
+                if re_state == 'running':
+                    state.busy = True
+                    print('telemetry task: Just set busy as True, now notifying'
+                          ' coroutines')
+                    await notify_coroutines('busy')
+                    print('telemetry task: DONE notifying coroutines')
+                elif re_state == 'idle':
+                    state.busy = False
+                    print('telemetry task: Just set busy as True, now notifying'
+                          ' coroutines')
+                    await notify_coroutines('busy')
+                    print('telemetry task: DONE notifying coroutines')
 
-    async with websockets.connect(BLUESKY_WEBSOCKET) as websocket:
-        await websocket.send(json.dumps({'type': 'subscribe'}))
-        initial_response = await websocket.recv()
-        print(f'telemetry task: got this initial response: {initial_response}')
-        # initial_response will be received almost immediately and serves to
-        # update us on what the CURRENT state of the RunEngine is.
-        re_state = json.loads(initial_response)['state']
-        print(f'telemetry task: re_state: {re_state}')
-        if re_state == 'running':
-            state.busy = True
-            print('telemetry task: Just set busy as True, now notifying \
-                   coroutines')
-            await notify_coroutines('busy')
-            print('telemetry task: DONE notifying coroutines')
-        elif re_state == 'idle':
-            state.busy = False
-            print('telemetry task: Just set busy as True, now notifying \
-                   coroutines')
-            await notify_coroutines('busy')
-            print('telemetry task: DONE notifying coroutines')
-
-        while True:
-            an_update = await websocket.recv()
-            print(f'telemetry task: received an update: {an_update}')
-            re_state = json.loads(an_update)['state']
-            print(f'telemetry task: re_state: {re_state}')
-            if re_state == 'idle':
-                print('telemetry task: Just set busy as False, now notifying \
-                       coroutines')
-                state.busy = False
-                await notify_coroutines('busy')
-                print('telemetry task: DONE notifying coroutines')
-            if re_state == 'running':
-                state.busy = True
-                print('telemetry task: Just set busy as False, now notifying \
-                       coroutines')
-                await notify_coroutines('busy')
-                print('telemetry task: DONE notifying coroutines')
-
+                while True:
+                    an_update = await websocket.recv()
+                    print(f'telemetry task: received an update: {an_update}')
+                    re_state = json.loads(an_update)['state']
+                    print(f'telemetry task: re_state: {re_state}')
+                    if re_state == 'idle':
+                        print('telemetry task: Just set busy as False, now '
+                              'notifying coroutines')
+                        state.busy = False
+                        await notify_coroutines('busy')
+                        print('telemetry task: DONE notifying coroutines')
+                    if re_state == 'running':
+                        state.busy = True
+                        print('telemetry task: Just set busy as False, now '
+                              'notifying coroutines')
+                        await notify_coroutines('busy')
+                        print('telemetry task: DONE notifying coroutines')
+        # to handle if connection breaks:
+        except websockets.exceptions.ConnectionClosedError:
+            print("connection to bluesky dispatcher lost.")
+        except ConnectionError:
+            print("connection to bluesky dispatcher lost..")
+        except asyncio.streams.IncompleteReadError:
+            print("connection to bluesky dispatcher lost...")
 
 #  -------------------------------------
 #  fastapi startup and shutdown routines
@@ -310,7 +329,10 @@ async def service_startup():
     # the task variable. Admittedly this is a hacky attempt at fixing
     # https://stackoverflow.com/questions/46890646/asyncio-weirdness-of-task-exception-was-never-retrieved
     print("ensuring future bluesky_telemetry_task")
-    task = asyncio.ensure_future(bluesky_telemetry_task())
+    # todo: if the bluesky_telemetry_task suffers an exception( such as the
+    #  bluesky dispatcher service being unavailable) the exception is never
+    #  retrieved so we need to retrieve it.
+    asyncio.ensure_future(bluesky_telemetry_task())
     # Link to the code used as inspiration for this trick (I didn't know you
     # could just do .create_task (or ensure_future in python 3.6), I thought
     # you would need to get a hold of
@@ -320,7 +342,3 @@ async def service_startup():
     # our simulate_data_gathering coroutine because the actual fastAPI server
     # will not start until this is complete, but `while True` loop ensures it
     # never completes.
-
-
-
-
