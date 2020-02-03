@@ -193,10 +193,7 @@ async def run_a_simulated_scan(s_params: FakeScanParams, response: Response):
         response.status_code = HTTP_409_CONFLICT
         return {'success': False,
                 'status': 'currently busy with a previous scan'}
-    result = await start_scan('simulated', s_params.json())
-    # Todo: Suspect that this is sending params as a string, and not a json
-    #  object. different to how they are being sent by the
-    #  websocket_client_test.py for example
+    result = await start_scan('simulated', json.loads(s_params.json()))
     return result
 
 
@@ -207,7 +204,7 @@ async def run_the_real_helical_scan_in_the_lab(s_params: HelicalParams, response
         response.status_code = HTTP_409_CONFLICT
         return {'success': False,
                 'status': 'currently busy with a previous scan'}
-    result = await start_scan('helical scan', s_params.json())
+    result = await start_scan('helical scan', json.loads(s_params.json()))
     return result
 
 
