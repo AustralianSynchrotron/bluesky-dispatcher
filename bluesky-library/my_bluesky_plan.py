@@ -8,6 +8,10 @@ from bluesky.plans import count
 from ophyd.sim import det1, det2  # two simulated detectors
 import time  # for print message timestamps
 import os
+from devices import RedisSlewScan, CameraDetector
+from bluesky.preprocessors import SupplementalData
+from producers import BlueskyKafkaProducer
+
 
 # import everything from the bluesky_dispatcher:
 from bluesky_dispatcher import *
@@ -64,6 +68,45 @@ def do_fake_helical_scan(
     print("scan finished ( in do_fake_helical_scan )")
 
 
+def do_helical_scan(run_engine,
+                    hook_function,
+                    start_y=10,
+                    height=10,
+                    pitch=2,
+                    restful_host='http://camera-server:8000',
+                    websocket_url='ws://camera-server:8000/ws'):
+
+    # print a message to aid diagnostics:
+    timestamp_str = time.strftime("%d.%b %Y %H:%M:%S")
+    print(f'{timestamp_str}:  running helical scan with the following'
+          f' params: start_y:{start_y}, height:{height}, pitch:{pitch},'
+          f' restful_host:{restful_host}, websocket_url:{websocket_url}')
+
+    # create signals (aka devices)
+    camera = CameraDetector(name='camera',
+                            restful_host=restful_host,
+                            websocket_url=websocket_url)
+    rss = RedisSlewScan(name='slew_scan',
+                        start_y=start_y,
+                        height=height,
+                        pitch=pitch)
+
+    # set up monitors that allow sending real-time data from the
+    # slew scan to Kafka
+    sd = SupplementalData()
+    sd.monitors.append(rss)
+    sd.monitors.append(camera)
+    run_engine.preprocessors.append(sd)
+
+    # attach Kafka producer. This will make sure Bluesky documents
+    # are sent to Kafka
+    producer = BlueskyKafkaProducer('kafka:9092')
+    run_engine.subscribe(producer.send)
+
+    # run plan
+    run_engine(count([rss, camera]))
+    print("scan finished ( in do_helical_scan )")
+
 
 # create an instance of the BlueskyDispatcher:
 bd = BlueskyDispatcher(port=WEBSOCKET_CONTROL_PORT)
@@ -75,6 +118,8 @@ bd.add_scan(do_fake_helical_scan, 'simulated')
 # first arg is function,
 # second is label by which we can refer to this plan in future websocket
 # messages
+
+bd.add_scan(do_helical_scan, 'helical scan')
 
 # start the dispatcher, which means it start listening for websocket
 # connections. From now on we use a different service to interact* with it
