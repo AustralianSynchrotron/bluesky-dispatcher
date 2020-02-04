@@ -47,6 +47,13 @@ RE(count([ss]))
 
 #### Refactor your plan into a callable function
 
+Be sure to include sane defaults for your parameters as the dispatcher does not
+perform checking that supplied parameters in a websocket message to request the
+start of a scan have all been supplied appropriately.
+
+*todo: the dispatcher should not die due to a badly supplied scan function*
+*refactor it to be more robust with its assumptions*
+
 ```python
 from devices import RedisSlewScan
 from bluesky import RunEngine
@@ -288,6 +295,305 @@ except ConnectionError as e:
     print(f'I was unable to connect to the websocket {uri}')
     print(str(e))
 ```
+
+### Websocket interface
+
+As you have seen in the above example, part of the websocket message is the
+'type'. The different *types* of websocket message that you can send are listed
+below.
+
+type **'start'**:
+
+| keys | required? | description |
+|---------|-----------|-------------|
+|plan | yes | the name provided with the function when it was added to the dispatcher|
+|params| no | parameters to pass to the scan function when its called to overwrite its defaults|
+
+example sent message:
+
+```
+json.dumps({
+    "type": "start",
+    "plan": "slew-scan",
+    "params": {
+        "start_y": 50,
+        "height": 100
+    }
+})
+```
+
+example received success response:
+
+```
+{
+    "success": True,
+    "status": "Signalling main thread to start a new scan",
+    "params": {
+        "start_y": 50,
+        "height": 100
+    }
+}
+```
+
+example received failure responses:
+
+when the dispatcher is already running a scan:
+
+```
+{
+    "success": False,
+    "status": "Currently busy with \"slew_scan\" scan"
+}
+```
+
+when a required param wasn't supplied:
+
+```
+{
+    "success": False,
+    "status": "You need to provide a \"plan\" key specifying which scan you want to start"
+}
+```
+
+when the requested scan is not known:
+
+```
+{
+    "success": False,
+    "status": "I don\'t recognise any scan function by the name \"slew_scan\""
+}
+```
+
+type **'halt'**:
+
+For when you want to stop a running plan, don't wait for it to run cleanup, and
+have the run be marked as aborted.
+ 
+*no other keys*
+
+example sent message:
+
+```
+json.dumps({
+    "type": "halt"
+})
+```
+
+example received success response:
+
+```
+{
+    "success": True,
+    "status": "halt requested"
+}
+```
+
+example received failure response:
+
+```
+{
+    "success": False,
+    "status": "exception was raised",
+    "exception": "…"
+}
+```
+
+type **'abort'**:
+
+For when you want to stop a running plan, wait for it to run cleanup, and have
+the run be marked as aborted.
+
+| keys | required? | description |
+|---------|-----------|-------------|
+|reason | no | the reason to be logged against the results of the scan indicating why it was aborted|
+
+example sent message:
+
+```
+json.dumps({
+    "type": "abort",
+    "reason": "sample mount failed midway through scanning"
+})
+```
+
+example received success response:
+
+```
+{
+    "success": True,
+    "status": "abort requested"
+}
+```
+
+example received failure response:
+
+```
+{
+    "success": False,
+    "status": "exception was raised",
+    "exception": "…"
+}
+```
+
+type **'stop'**:
+
+For when you want to stop a running plan, wait for it to run clean up, and have
+the run be marked as successful.
+
+*no other keys*
+
+example sent message:
+
+```
+json.dumps({
+    "type": "stop"
+})
+```
+
+example received success response:
+
+```
+{
+    "success": True,
+    "status": "stop requested"
+}
+```
+
+example received failure response:
+
+```
+{
+    "success": False,
+    "status": "exception was raised",
+    "exception": "…"
+}
+```
+
+type **'pause'**:
+
+For when you want to pause a running scan.
+
+*no other keys*
+
+example sent message:
+
+```
+json.dumps({
+    "type": "pause"
+})
+```
+
+example received success response:
+
+```
+{
+    "success": True,
+    "status": "pause requested"
+}
+```
+
+example received failure response:
+
+```
+{
+    "success": False,
+    "status": "exception was raised",
+    "exception": "…"
+}
+```
+
+type **'resume'**:
+
+For when you want to resume a paused scan.
+
+*no other keys*
+
+example sent message:
+
+```
+json.dumps({
+    "type": "resume"
+})
+```
+
+example received success response:
+
+```
+{
+    "success": True,
+    "status": "resume requested"
+}
+```
+
+example received failure responses:
+
+when the run engine isn't in a paused state:
+```
+{
+    "success": False,
+    "status": "cannot resume a runEngine that isn\'t paused"
+}
+```
+
+```
+{
+    "success": False,
+    "status": "exception was raised",
+    "exception": "…"
+}
+```
+
+type **'state'**:
+
+For when you want to probe the current state of the Bluesky run engine.
+
+*no other keys*
+
+example sent message:
+
+```
+json.dumps({
+    "type": "state"
+})
+```
+
+example received success response:
+
+```
+{
+    "type": "status",
+    "about": "current state of the Bluesky RunEngine",
+    "state": "idle"
+}
+```
+
+type **'subscribe'**:
+
+For when you want to subscribe to a constant stream of updates whenever the
+run engine's state changes, so as to know the 'busy' status of the dispatcher.
+
+*no other keys*
+
+example sent message:
+
+```
+json.dumps({
+    "type": "subscribe"
+})
+```
+
+example received success response:
+
+```
+{
+    "type": "status",
+    "about": "run engine state updates",
+    "state": "idle"
+}
+```
+
+*connection is then maintained and client will continue to receive state
+messages whenever an update occurs*
 
 
 ## History
