@@ -81,6 +81,7 @@ from bluesky.plans import count
 from bluesky.preprocessors import SupplementalData
 
 def run_scan(RE, hook_func, name='slew_scan', start_y=50, height=100, pitch=20):
+#------------^^--^^^^^^^^^------------------------------------------------------
     # set up redis slew scan device
     ss = RedisSlewScan(name, start_y, height, pitch)
     
@@ -117,6 +118,7 @@ def run_scan(RE, hook_func, name='slew_scan', start_y=50, height=100, pitch=20):
     
     # set up run engine
     # RE = RunEngine()  ## <- delete this line, get from param 1 instead
+#---^^^^^^^^^^^^^^^^^^----------------------------------------------------------
     RE.subscribe(print)
     # can subscribe to best effort callback or kafka producer
     RE.preprocessors.append(sd) # adding sd monitor to sd run engine callbacks
@@ -134,6 +136,7 @@ from bluesky import RunEngine
 from bluesky.plans import count
 from bluesky.preprocessors import SupplementalData
 from bluesky-library import bluesky_dispatcher
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^----------------------------------
 
 def run_scan(RE, hook_func, name='slew_scan', start_y=50, height=100, pitch=20):
     # set up redis slew scan device
@@ -180,6 +183,7 @@ def run_scan(RE, hook_func, name='slew_scan', start_y=50, height=100, pitch=20):
 
 if __name__ is '__main__':
     bd = bluesky_dispatcher(port=8765)
+#---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------------------------------------------
     # the port (8765) is the websocket port the dispatcher will be accessible by
     run_scan()
 ```
@@ -213,6 +217,7 @@ if __name__ is '__main__':
     bd = bluesky_dispatcher(port=8765)
     # the port (8765) is the websocket port the dispatcher will be accessible by
     bd.add_scan(run_scan, 'slew_scan')
+#---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------------------------------------------
     run_scan()
 ```
 
@@ -245,6 +250,7 @@ if __name__ is '__main__':
     # the port (8765) is the websocket port the dispatcher will be accessible by
     bd.add_scan(run_scan, 'slew_scan')
     bd.start()
+#---^^^^^^^^^^------------------------------------------------------------------
     # run_scan()
 ```
 
