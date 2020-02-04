@@ -273,12 +273,11 @@ uri = "ws://localhost:8765"
 try:
     with websockets.connect(uri) as websocket:
 
-        plan = "slew_scan"  # this corresponds with expected label on
+        plan = "slew_scan"  # corresponds to bd.add_scan(run_scan, 'slew_scan')
         payload = {
             "type": "start",
             "plan": plan,
             "params": {
-                "name": "slew_scan",
                 "start_y": 50,
                 "height": 100,
                 "pitch": 20
