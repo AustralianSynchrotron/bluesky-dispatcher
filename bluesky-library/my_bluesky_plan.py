@@ -1,6 +1,5 @@
 """
-Example of how to utilise the bluesky_dispatcher,
-making use of the helical scan demo from brightsac.
+Example of how to utilise the bluesky_dispatcher.
 """
 
 # import libs required for our plan function:
@@ -8,9 +7,6 @@ from bluesky.plans import count
 from ophyd.sim import det1, det2  # two simulated detectors
 import time  # for print message timestamps
 import os
-from devices import RedisSlewScan, CameraDetector
-from bluesky.preprocessors import SupplementalData
-from producers import BlueskyKafkaProducer
 
 
 # import everything from the bluesky_dispatcher:
@@ -21,7 +17,7 @@ WEBSOCKET_CONTROL_PORT = os.environ.get('WEBSOCKET_CONTROL_PORT', 8765)
 
 # define your plan as a function that can be called
 # (parameters must be defined as keyword args)
-def do_fake_helical_scan(
+def do_fake_scan(
         run_engine,
         hook_function,
         example_param_1=None,
@@ -45,7 +41,7 @@ def do_fake_helical_scan(
 
     # print a message to aid diagnostics:
     timestamp_str = time.strftime("%d.%b %Y %H:%M:%S")
-    print(f'{timestamp_str}:  running FAKE helical scan with '
+    print(f'{timestamp_str}:  running FAKE scan with '
           f'the following params: '
           f'example_param_1:{example_param_1}, '
           f'example_param_2:{example_param_2}')
@@ -65,47 +61,7 @@ def do_fake_helical_scan(
     hook_function("idle", "running")  # undo our artificial state
     # update, now we're back in line with the actual RunEngine state.
 
-    print("scan finished ( in do_fake_helical_scan )")
-
-
-def do_helical_scan(run_engine,
-                    hook_function,
-                    start_y=10,
-                    height=10,
-                    pitch=2,
-                    restful_host='http://camera-server:8000',
-                    websocket_url='ws://camera-server:8000/ws'):
-
-    # print a message to aid diagnostics:
-    timestamp_str = time.strftime("%d.%b %Y %H:%M:%S")
-    print(f'{timestamp_str}:  running helical scan with the following'
-          f' params: start_y:{start_y}, height:{height}, pitch:{pitch},'
-          f' restful_host:{restful_host}, websocket_url:{websocket_url}')
-
-    # create signals (aka devices)
-    camera = CameraDetector(name='camera',
-                            restful_host=restful_host,
-                            websocket_url=websocket_url)
-    rss = RedisSlewScan(name='slew_scan',
-                        start_y=start_y,
-                        height=height,
-                        pitch=pitch)
-
-    # set up monitors that allow sending real-time data from the
-    # slew scan to Kafka
-    sd = SupplementalData()
-    sd.monitors.append(rss)
-    sd.monitors.append(camera)
-    run_engine.preprocessors.append(sd)
-
-    # attach Kafka producer. This will make sure Bluesky documents
-    # are sent to Kafka
-    producer = BlueskyKafkaProducer('kafka:9092')
-    run_engine.subscribe(producer.send)
-
-    # run plan
-    run_engine(count([rss, camera]))
-    print("scan finished ( in do_helical_scan )")
+    print("scan finished ( in do_fake_scan )")
 
 
 # create an instance of the BlueskyDispatcher:
@@ -114,25 +70,33 @@ bd = BlueskyDispatcher(port=WEBSOCKET_CONTROL_PORT)
 # add the function we defined to the dispatcher,
 # providing a label which is how we will refer to the plan later in our sent
 # websocket messages:
-bd.add_scan(do_fake_helical_scan, 'simulated')
+bd.add_scan(do_fake_scan, 'simulated')
 # first arg is function,
 # second is label by which we can refer to this plan in future websocket
 # messages
 
-bd.add_scan(do_helical_scan, 'helical scan')
-
-# start the dispatcher, which means it start listening for websocket
+# start the dispatcher, which means it starts listening for websocket
 # connections. From now on we use a different service to interact* with it
 # *( start plans, pause and stop them, get state ).
+# eg. we can invoke the scan to start by sending a websocket message of the
+# form below, json encoded:
+# {
+#   type: "start",
+#   plan: "simulated",
+#   params: {
+#     example_param_1: 200,
+#     example_param_2: 1000
+#   }
+# }
 bd.start()
 
 # THE RULES:
 # - You must interact with the dispatcher through the port number you have
 #   defined. (it defaults to 8765)
 
-# - You must follow a defined and documented protocol to your websocket messages
-#   when you want it to run a plan you have previously added to it
-#   Todo: document this websocket protocol
+# - You must follow the protocol, defined and documented in the
+#   bluesky_dispatcher README, in your websocket messages_demo when you want it
+#   to run a plan you have previously added to it
 
 # - You must define your scan function, with any parameters you wish it to take,
 #   and you must declare those as kwargs. (This is to allow the websocket
