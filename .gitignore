@@ -1,0 +1,9 @@
+# ignore virtual env's
+venv*
+
+# ignore built blobs
+__pycache__/
+
+# ignore pycharm editor config
+.idea/
+
