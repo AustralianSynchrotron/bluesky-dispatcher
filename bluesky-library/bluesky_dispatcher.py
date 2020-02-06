@@ -232,7 +232,7 @@ class BlueskyDispatcher:
                 # raises "TypeError: arg after ** must be a mapping"
 
                 # rely on defaults if no params:
-                scan_func(self._RE, self.__state_hook())
+                scan_func(self._RE, self.__state_hook)
                 #Todo: don't inject the state_hook function,
                 # this is only for testing!
 
