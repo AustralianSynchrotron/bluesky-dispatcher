@@ -76,10 +76,13 @@ import json
 import time
 import functools  # necessary for https://docs.python.org/3.6/library/asyncio-eventloop.html#asyncio.loop.run_in_executor
 # see https://docs.python.org/3.6/library/asyncio-eventloop.html#asyncio-pass-keywords
+import inspect
 from queue import Queue
+
 
 def timestamp():
     return "[" + time.strftime("%d.%b %Y %H:%M:%S") + "]: "
+
 
 class ScanNameError(Exception):
     """Raised when:
@@ -140,7 +143,6 @@ class BlueskyDispatcher:
         self._RE.state_hook = self.__state_hook
         print(f'{timestamp()}BlueskyDispatcher initialised.')
 
-
     def add_scan(self, scan_function, scan_name):
         if scan_name in self._scan_functions:
             raise ScanNameError(f'The supplied scan name "{scan_name}" is '
@@ -148,15 +150,14 @@ class BlueskyDispatcher:
                                 f'previously supplied scan function remove the '
                                 f'existing one first with '
                                 f'remove_scan("{scan_name}")')
-        self._scan_functions[scan_name] = scan_function
-
+        if self.__good_function_signature(scan_function):
+            self._scan_functions[scan_name] = scan_function
 
     def remove_scan(self, scan_name):
         if scan_name not in self._scan_functions:
             raise ScanNameError(f'The supplied scan name "{scan_name}" is not '
                                 f'in the list of scan functions')
         del self._scan_functions[scan_name]
-
 
     def start(self):
         # This code runs in the main thread.
@@ -265,9 +266,29 @@ class BlueskyDispatcher:
             # _selected_scan or _supplied_params because they are not running
             # in parallel thanks to asyncio.
 
-
     ####    Start of Private methods:
 
+    def __good_function_signature(self, function):
+        """checks that the supplied function has a signature that matches our
+        requirements (first two args are positional, remaining args are named
+        and optional"""
+        params = inspect.signature(function).parameters
+        # params is now an ordered dict
+        count = 0
+        for i, (key, val) in enumerate(params.items()):
+            count += 1
+            if i < 2:
+                assert val.default is val.empty, "Don't provide default " \
+                                                 "values for the first two " \
+                                                 "args, the dispatcher will " \
+                                                 "supply those."
+            else:
+                assert val.default is not val.empty, "You need to provide " \
+                                                     "sane defaults for your " \
+                                                     "plan's parameters"
+        assert count > 1, "You need to supply at least 2 positional args for " \
+                          "RunEngine and StateHook"
+        return True
 
     def __state_hook(self, new_state, old_state):
         """this function will be called from the main thread, by the
@@ -276,7 +297,6 @@ class BlueskyDispatcher:
         # https://docs.python.org/3.6/library/queue.html
         self._re_state_changes_q.put(
             {'new_state': new_state, 'old_state': old_state})
-
 
     async def __bridge_queue_events_to_coroutines(self,
                                                   loop,
@@ -330,11 +350,9 @@ class BlueskyDispatcher:
             self._re_state_changes_data = None
             queue.task_done()
 
-
     async def __yield_control_back_to_event_loop(self):
         await asyncio.sleep(0)
         # https://github.com/python/asyncio/issues/284
-
 
     def __websocket_thread(self, ready_signal=None):
         # runs in the other (asyncio driven) thread (not the main thread)
@@ -367,7 +385,6 @@ class BlueskyDispatcher:
 
         loop_for_this_thread.run_forever()
         loop_for_this_thread.close()
-
 
     async def __websocket_server(self, websocket, path):
         # runs in the other (asyncio driven) thread (not the main thread)
