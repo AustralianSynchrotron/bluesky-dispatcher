@@ -70,6 +70,7 @@ projects should be the instructions around how to perform the scan/experiment.
 
 from bluesky import RunEngine
 import threading
+import logging
 import asyncio
 import websockets
 import json
@@ -78,6 +79,8 @@ import functools  # necessary for https://docs.python.org/3.6/library/asyncio-ev
 # see https://docs.python.org/3.6/library/asyncio-eventloop.html#asyncio-pass-keywords
 import inspect
 from queue import Queue
+
+logger = logging.getLogger(__name__)
 
 
 def timestamp():
@@ -141,7 +144,7 @@ class BlueskyDispatcher:
         # the items to one-by-one notify waiting websocket coroutines through
         # the above asyncio.Event()
         self._RE.state_hook = self.__state_hook
-        print(f'{timestamp()}BlueskyDispatcher initialised.')
+        logger.debug('BlueskyDispatcher initialised.')
 
     def add_scan(self, scan_function, scan_name):
         if scan_name in self._scan_functions:
@@ -161,7 +164,7 @@ class BlueskyDispatcher:
 
     def start(self):
         # This code runs in the main thread.
-        print(f'{timestamp()}BlueskyDispatcher starting…')
+        logger.info('BlueskyDispatcher starting…')
         ws_thread_ready = threading.Event()
         #   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .
         ws_thread = threading.Thread(target=self.__websocket_thread,
@@ -220,9 +223,10 @@ class BlueskyDispatcher:
                         self._RE,
                         self.__state_hook,  # Todo: NO state_hook (just testing!)
                         **self._supplied_params)
-                except Exception as e:
-                    print('ERROR during execution of supplied scan with '
-                          f'name "{self._selected_scan}".', e)
+                except Exception:
+                    logger.exception(f'supplied plan with name '
+                                     f'"{self._selected_scan}" raised '
+                                     f'exception')
                     # todo: send message to any connected websocket
                     #  clients that there was an issue executing the scan.
                 # IMPORTANT!
@@ -242,9 +246,10 @@ class BlueskyDispatcher:
                     scan_func(self._RE, self.__state_hook)
                     #Todo: don't inject the state_hook function,
                     # this is only for testing!
-                except Exception as e:
-                    print('ERROR during execution of supplied scan with '
-                          f'name "{self._selected_scan}".', e)
+                except Exception:
+                    logger.exception(f'supplied plan with name '
+                                     f'"{self._selected_scan}" raised '
+                                     f'exception')
                     # todo: send message to any connected websocket
                     #  clients that there was an issue executing the scan.
 
@@ -336,8 +341,7 @@ class BlueskyDispatcher:
                 None,
                 functools.partial(queue.get, block=True))
             # (this is the only consumer of the queue)
-            print('return value from the queue: ')
-            print(state_update)
+            logger.debug(f'return value from the queue: {repr(state_update)}')
             self._re_state_changes_data = state_update
 
             asyncio_event.set()
@@ -368,40 +372,40 @@ class BlueskyDispatcher:
 
     def __websocket_thread(self, ready_signal=None):
         # runs in the other (asyncio driven) thread (not the main thread)
-        print("websocket thread: establishing new event loop")
+        logger.debug("websocket thread: establishing new event loop")
         loop_for_this_thread = asyncio.new_event_loop()
         asyncio.set_event_loop(loop_for_this_thread)
 
         if ready_signal is not None:
-            print("websocket thread: signalling that I'm ready")
+            logger.debug("websocket thread: signalling that I'm ready")
             ready_signal.set()
 
-        print("websocket thread: starting websocket control server")
+        logger.debug("websocket thread: starting websocket control server")
         loop_for_this_thread.run_until_complete(
             websockets.serve(
                 self.__websocket_server,
                 "0.0.0.0",
                 self._websocket_port))
 
-        print("websocket thread: Setting the "
-              "websocket state update Event() object")
+        logger.debug("websocket thread: Setting the websocket state update "
+                     "Event() object")
         self._websocket_state_update = asyncio.Event(loop=loop_for_this_thread)
-        print("websocket thread: starting events bridging function")
+        logger.debug("websocket thread: starting events bridging function")
         asyncio.ensure_future(
             self.__bridge_queue_events_to_coroutines(
                 loop_for_this_thread,
                 self._re_state_changes_q,
                 self._websocket_state_update), loop=loop_for_this_thread)
 
-        print(f'{timestamp()}websocket thread: ready for connections!')
+        logger.debug("websocket thread: ready for connections!")
 
         loop_for_this_thread.run_forever()
         loop_for_this_thread.close()
 
     async def __websocket_server(self, websocket, path):
         # runs in the other (asyncio driven) thread (not the main thread)
-        print("websocket server: client connected to me!")
-        print(f'websocket server: runengine state: {self._RE.state}')
+        logger.info("websocket server: client connected to me!")
+        logger.debug(f'websocket server: runengine state: {self._RE.state}')
         while True:
             # This loop is only effectively infinite if their message
             # contains a 'keep_open' key (see bottom of loop)
@@ -432,9 +436,9 @@ class BlueskyDispatcher:
                     {'type': 'subscribe'}
                 """
             except json.JSONDecodeError:
-                print("websocket server: the following received "
-                      "message could not be properly decoded as json:")
-                print(json_msg)
+                logger.warning(f'websocket server: the following received '
+                               f'message could not be properly decoded as '
+                               f'json: {json_msg}')
                 await websocket.send(json.dumps({
                     'success': False,
                     'status': "Your message could not be properly decoded, "
@@ -443,9 +447,7 @@ class BlueskyDispatcher:
                 return None
             # now at this point we can be relatively
             # confident obj is a proper object
-            print("websocket server: obj:")
-            print(obj)
-
+            logger.debug(f'received websocket json message: {repr(obj)}')
             if obj['type'] == 'halt':
                 # "stop a running plan,
                 # don't wait for it to clean up, mark as aborted"

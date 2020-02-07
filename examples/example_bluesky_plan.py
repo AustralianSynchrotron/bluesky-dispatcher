@@ -12,6 +12,11 @@ import os
 # import everything from the bluesky_dispatcher:
 from bluesky_dispatcher import *
 
+import logging
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s:%(levelname)s:%(module)s:%(message)s')
+logger = logging.getLogger(__name__)
+
 WEBSOCKET_CONTROL_PORT = os.environ.get('WEBSOCKET_CONTROL_PORT', 8765)
 
 
@@ -34,17 +39,15 @@ def do_fake_scan(
     # internal functioning of the dispatcher. but at least allows one to make
     # use of such functionality if it turned out to be desirable... good idea
     # or not?
-
     if example_param_1 is None and example_param_2 is None:
-        print("simulation (fake) scan: No supplied parameters, "
-              "running with my defaults")
+        logger.debug("simulation (fake) scan: No supplied parameters, "
+                     "running with my defaults")
 
     # print a message to aid diagnostics:
     timestamp_str = time.strftime("%d.%b %Y %H:%M:%S")
-    print(f'{timestamp_str}:  running FAKE scan with '
-          f'the following params: '
-          f'example_param_1:{example_param_1}, '
-          f'example_param_2:{example_param_2}')
+    logger.debug(f'running FAKE scan with the following params: '
+                 f'example_param_1: {example_param_1}, '
+                 f'example_param_2: {example_param_2}')
 
     run_engine(count([det1, det2]))
 
@@ -61,7 +64,7 @@ def do_fake_scan(
     hook_function("idle", "running")  # undo our artificial state
     # update, now we're back in line with the actual RunEngine state.
 
-    print("scan finished ( in do_fake_scan )")
+    logger.debug("scan finished ( in do_fake_scan )")
 
 
 # create an instance of the BlueskyDispatcher:
