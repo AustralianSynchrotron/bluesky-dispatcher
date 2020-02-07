@@ -215,10 +215,16 @@ class BlueskyDispatcher:
             self._start_scanning.clear()
             scan_func = self._scan_functions[self._selected_scan]
             if self._supplied_params is not None:
-                scan_func(
-                    self._RE,
-                    self.__state_hook,  # Todo: NO state_hook (just testing!)
-                    **self._supplied_params)
+                try:
+                    scan_func(
+                        self._RE,
+                        self.__state_hook,  # Todo: NO state_hook (just testing!)
+                        **self._supplied_params)
+                except Exception as e:
+                    print('ERROR during execution of supplied scan with '
+                          f'name "{self._selected_scan}".', e)
+                    # todo: send message to any connected websocket
+                    #  clients that there was an issue executing the scan.
                 # IMPORTANT!
                 # We rely on the supplied_params being set by the code that
                 # .set() the start_scanning Event BEFORE it .set() the
@@ -232,9 +238,15 @@ class BlueskyDispatcher:
                 # raises "TypeError: arg after ** must be a mapping"
 
                 # rely on defaults if no params:
-                scan_func(self._RE, self.__state_hook)
-                #Todo: don't inject the state_hook function,
-                # this is only for testing!
+                try:
+                    scan_func(self._RE, self.__state_hook)
+                    #Todo: don't inject the state_hook function,
+                    # this is only for testing!
+                except Exception as e:
+                    print('ERROR during execution of supplied scan with '
+                          f'name "{self._selected_scan}".', e)
+                    # todo: send message to any connected websocket
+                    #  clients that there was an issue executing the scan.
 
             # if we reset self._selected_scan here I think we might risk having
             # this thread be paused while a websocket thread takes a client that
