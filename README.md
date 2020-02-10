@@ -609,3 +609,7 @@ the work being done should be worked on to be easily reused by future
 projects. This repository is therefore the extraction of the bluesky
 dispatcher component used by and developed by the helical scan project.
 
+## Developer instructions
+
+For instructions on how to get up and running developing this project, have a
+look at the [README accompanying the examples](examples/README.md)
