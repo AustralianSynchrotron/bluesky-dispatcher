@@ -30,7 +30,7 @@ async def test_starting_plan():
             await websocket.send(json.dumps(payload))
             response = await websocket.recv()
             print(f'I\'m the websocket client and I got this ' +
-                  'response: {response}')
+                  f'response: {response}')
             await websocket.close(reason="thats enough testing for now")
     except ConnectionResetError:
         print('The websocket connection was closed by the other end abruptly')
