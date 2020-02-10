@@ -238,6 +238,8 @@ class BlueskyDispatcher:
 
             self._start_scanning.clear()
             scan_func = self._scan_functions[self._selected_scan]
+            self._exception = None  # reset the exception object in case a
+            # previous iteration had set it.
             try:
                 if self._supplied_params is not None:
                     scan_func(
