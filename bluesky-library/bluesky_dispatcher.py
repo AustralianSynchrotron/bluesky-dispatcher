@@ -97,12 +97,25 @@ class ScanNameError(Exception):
 
 class BlueskyDispatcher:
 
-    def __init__(self, port=8765):
+    def __init__(self, port=8765, handle_exceptions=False):
         self._RE = RunEngine(context_managers=[])
         # passing empty array as context managers so that the run engine will
         # not try to register signal handlers or complain that it's not the
         # main thread
         self._websocket_port = port
+
+        self._handle_exceptions = handle_exceptions
+        # determines whether or not this dispatcher should handle exceptions
+        # raised by user supplied scan functions by simply logging the
+        # exception and also updating any currently connected websocket
+        # subscriber clients. Or if it should re raise the exceptions to the
+        # user's calling code.
+
+        self._exception = None
+        # the actual exception object if any is raised by the execution of a
+        # user supplied plan/scan, for optional reraising (see
+        # self._handle_exceptions) after all websocket
+        # subscriber clients have been notified.
 
         self._selected_scan = None  # acts as a pointer to whichever scan
                                     # function is to be executed.
@@ -130,13 +143,21 @@ class BlueskyDispatcher:
 
         self._re_state_changes_data = None
         # Used to hold the information provided by the RunEngine whenever its
-        # state changes. eg.: {'new_state': 'idle', 'old_state': 'running'}
+        # state changes OR by this dispatcher if an exception was raised when
+        # running a plan.
+        #   eg.:
+        #   {'exception': False,
+        #    'new_state': 'idle',
+        #    'old_state': 'running'}
+        #   OR
+        #   {'exception': True,
+        #    'message': 'cannot divide by zero'}
         # Consumed by websocket connections serving 'subscribers'.
 
         self._websocket_state_update = asyncio.Event()
         # the event that 'wakes up' sleeping websocket subscriber connections
-        # so they can consume above re_state_changes_data to feed to their
-        # subscribers
+        # so they can consume above re_state_changes_data OR
+        # exception data to feed to their respective subscribers
 
         # register our state_hook function on the RunEngine, it will add updates
         # as items on the _re_state_changes_q Queue where the
@@ -217,41 +238,37 @@ class BlueskyDispatcher:
 
             self._start_scanning.clear()
             scan_func = self._scan_functions[self._selected_scan]
-            if self._supplied_params is not None:
-                try:
+            try:
+                if self._supplied_params is not None:
                     scan_func(
                         self._RE,
                         self.__state_hook,  # Todo: NO state_hook (just testing!)
                         **self._supplied_params)
-                except Exception:
-                    logger.exception(f'supplied plan with name '
-                                     f'"{self._selected_scan}" raised '
-                                     f'exception')
-                    # todo: send message to any connected websocket
-                    #  clients that there was an issue executing the scan.
-                # IMPORTANT!
-                # We rely on the supplied_params being set by the code that
-                # .set() the start_scanning Event BEFORE it .set() the
-                # start_scanning Event, (we appropriately reset it afterwards)
-                self._supplied_params = None
-                # I'm not sure how to detect that if _supplied_params is not
-                # None, that it then pertains to the function we are about to
-                # call and not a different previous function that was called.
-            else:
-                # this avoids executing self._selected_scan(…, **None) which
-                # raises "TypeError: arg after ** must be a mapping"
-
-                # rely on defaults if no params:
-                try:
+                else:
+                    # this avoids executing self._selected_scan(…, **None) which
+                    # raises "TypeError: arg after ** must be a mapping"
                     scan_func(self._RE, self.__state_hook)
-                    #Todo: don't inject the state_hook function,
-                    # this is only for testing!
-                except Exception:
-                    logger.exception(f'supplied plan with name '
-                                     f'"{self._selected_scan}" raised '
-                                     f'exception')
-                    # todo: send message to any connected websocket
-                    #  clients that there was an issue executing the scan.
+
+            except Exception as e:
+                logger.exception(f'supplied plan with name '
+                                 f'"{self._selected_scan}" raised '
+                                 f'exception')
+                if not self._handle_exceptions:
+                    self._exception = e
+                # send message to any connected websocket client there was
+                # an issue:
+                self._re_state_changes_q.put({
+                    'exception': True,
+                    'message': repr(e)})
+            # IMPORTANT!
+            # We rely on the supplied_params being set by the code that
+            # .set() the start_scanning Event BEFORE it .set() the
+            # start_scanning Event, (we appropriately reset it afterwards)
+            self._supplied_params = None
+            # I'm not sure how to detect that if _supplied_params is not
+            # None, that it then pertains to the function we are about to
+            # call and not a different previous function that was called.
+            # rely on defaults if no params:
 
             # if we reset self._selected_scan here I think we might risk having
             # this thread be paused while a websocket thread takes a client that
@@ -313,7 +330,9 @@ class BlueskyDispatcher:
         """
         # https://docs.python.org/3.6/library/queue.html
         self._re_state_changes_q.put(
-            {'new_state': new_state, 'old_state': old_state})
+            {'new_state': new_state,
+             'old_state': old_state,
+             'exception': False})
 
     async def __bridge_queue_events_to_coroutines(self,
                                                   loop,
@@ -364,6 +383,11 @@ class BlueskyDispatcher:
             # the global variable they will be referring to.
 
             self._re_state_changes_data = None
+
+            # if there was any exception then reraise it (if we're handling
+            # exceptions then self._exception would never have been set):
+            if self._exception is not None:
+                raise self._exception
             queue.task_done()
 
     async def __yield_control_back_to_event_loop(self):
@@ -616,12 +640,20 @@ class BlueskyDispatcher:
                         "connection that just received asyncio.Event signal "
                         "regarding update to RunEngine state")
                     # then send our client an update:
-                    await websocket.send(json.dumps({
-                        'type': "status",
-                        'about': "run engine state updates",
-                        'state': self._re_state_changes_data['new_state'],
-                        'old_state': self._re_state_changes_data['old_state']
-                    }))
+                    if self._re_state_changes_data['exception']:
+                        await websocket.send(json.dumps({
+                            'type': "status",
+                            'about': "exception raised during execution of "
+                                     "supplied bluesky plan",
+                            'message': self._re_state_changes_data['message']
+                        }))
+                    else:
+                        await websocket.send(json.dumps({
+                            'type': "status",
+                            'about': "run engine state updates",
+                            'state': self._re_state_changes_data['new_state'],
+                            'old_state': self._re_state_changes_data['old_state']
+                        }))
 
             else:
                 await websocket.send(json.dumps({
