@@ -239,10 +239,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
 async def wait_for_available_websocket(url, timeout_seconds=None,
                                         retry_delay=1):
-    remaining_time = timeout_seconds
-    try_forever = False
-    if timeout_seconds is None:
-        try_forever = True
+    try_forever = True if timeout_seconds is None else False
+    retries_remaining = 0 if try_forever else int(timeout_seconds / retry_delay)
+
     while True:
         try:
             async with websockets.connect(url) as testsocket:
@@ -250,8 +249,8 @@ async def wait_for_available_websocket(url, timeout_seconds=None,
         except (ConnectionError, websockets.exceptions.InvalidMessage) as e:
             print(e)
             if not try_forever:
-                remaining_time -= 1
-                if remaining_time < 0:
+                retries_remaining -= 1
+                if retries_remaining < 0:
                     return False
             print(f'unable to connect, will retry in {retry_delay} '
                   f'second/s')
