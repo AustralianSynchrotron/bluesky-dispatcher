@@ -277,7 +277,13 @@ async def subscribe_to_dispatcher():
 
     # wait for good connection before proceeding
     print("attempting to connect.")
-    await wait_for_available_websocket(BLUESKY_WEBSOCKET)
+    managed_to_connect = await wait_for_available_websocket(BLUESKY_WEBSOCKET)
+    if managed_to_connect is False:
+        pass
+        # pass because we are happy to wait indefinitely for the websocket
+        # (we do not pass any argument for timeout_seconds to the call to
+        # wait_for_available_websocket) therefore this code is unreachable
+        # but I include it as an example of completeness.
     async with websockets.connect(BLUESKY_WEBSOCKET) as websocket:
         await websocket.send(json.dumps({'type': 'subscribe'}))
         initial_response = await websocket.recv()
