@@ -96,6 +96,9 @@ async def start_scan(scan_name, params=None):
     # uri = "ws://localhost:8765"  # this needs to change to bluesky
     print(f'fastapi: making a websocket connection to bluesky ('
           f'{BLUESKY_WEBSOCKET}) to send job')
+
+    # Todo: think if this needs a try except block to be able to handle if
+    #  the websocket server is not available on the dispatcher side?
     async with websockets.connect(BLUESKY_WEBSOCKET) as websocket:
         payload = {"type": "start", "plan": scan_name, "params": params}
         await websocket.send(json.dumps(payload))
