@@ -111,12 +111,6 @@ class BlueskyDispatcher:
         # subscriber clients. Or if it should re raise the exceptions to the
         # user's calling code.
 
-        self._exception = None
-        # the actual exception object if any is raised by the execution of a
-        # user supplied plan/scan, for optional reraising (see
-        # self._handle_exceptions) after all websocket
-        # subscriber clients have been notified.
-
         self._selected_scan = None  # acts as a pointer to whichever scan
                                     # function is to be executed.
         self._supplied_params = None  # when the selected_scan is called, these
@@ -238,8 +232,6 @@ class BlueskyDispatcher:
 
             self._start_scanning.clear()
             scan_func = self._scan_functions[self._selected_scan]
-            self._exception = None  # reset the exception object in case a
-            # previous iteration had set it.
             try:
                 if self._supplied_params is not None:
                     scan_func(
@@ -252,16 +244,15 @@ class BlueskyDispatcher:
                     scan_func(self._RE, self.__state_hook)
 
             except Exception as e:
-                logger.exception(f'supplied plan with name '
-                                 f'"{self._selected_scan}" raised '
-                                 f'exception')
-                if not self._handle_exceptions:
-                    self._exception = e
+                name_and_shame = (f'supplied plan with name '
+                                  f'"{self._selected_scan}" raised '
+                                  f'exception')
+                logger.exception(name_and_shame)
                 # send message to any connected websocket client there was
                 # an issue:
                 self._re_state_changes_q.put({
                     'exception': True,
-                    'message': repr(e)})
+                    'message': name_and_shame + '\n' + repr(e)})
             # IMPORTANT!
             # We rely on the supplied_params being set by the code that
             # .set() the start_scanning Event BEFORE it .set() the
@@ -277,6 +268,7 @@ class BlueskyDispatcher:
             # requests to start a scan, and it tries to respond that we are
             # still busy with a current scan, and try to get which scan based on
             # self._selected_scan, but we had just reset it to None
+            logger.debug("releasing busy lock")
             self._busy.release()
             # if we reset self._selected_scan here AFTER we release the _busy
             # lock, I fear that we could have a scenario where a websocket takes
@@ -386,10 +378,6 @@ class BlueskyDispatcher:
 
             self._re_state_changes_data = None
 
-            # if there was any exception then reraise it (if we're handling
-            # exceptions then self._exception would never have been set):
-            if self._exception is not None:
-                raise self._exception
             queue.task_done()
 
     async def __yield_control_back_to_event_loop(self):
@@ -609,6 +597,7 @@ class BlueskyDispatcher:
                     # self._selected_scan and self._supplied_params,
                     # etc.) while the 'main' thread is starting to get
                     # started on executing the plan.
+                    logger.debug("locking busy lock")
                     self._busy.acquire()
 
                     # initiate a scan by setting an event object that the main
@@ -644,7 +633,7 @@ class BlueskyDispatcher:
                     # then send our client an update:
                     if self._re_state_changes_data['exception']:
                         await websocket.send(json.dumps({
-                            'type': "status",
+                            'type': "exception",
                             'about': "exception raised during execution of "
                                      "supplied bluesky plan",
                             'message': self._re_state_changes_data['message']
@@ -656,11 +645,16 @@ class BlueskyDispatcher:
                             'state': self._re_state_changes_data['new_state'],
                             'old_state': self._re_state_changes_data['old_state']
                         }))
-
+            # client's message doesn't match any of the above, therefore we
+            # don't know what they want from us:
             else:
                 await websocket.send(json.dumps({
                     'success': False,
                     'status': "Unsupported message type"}))
+                # At this point we don't want to keep looping here if their
+                # original request is not serviceable.
+                await websocket.close()
+                break
 
             if 'keep_open' not in obj:
                 await websocket.close()
