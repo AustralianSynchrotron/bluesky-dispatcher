@@ -233,6 +233,10 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_json({'busy': state.busy})
         if state.update_event_type == 'shutdown':
             break
+        if state.update_event_type == 'exception':
+            await websocket.send_json({
+                'exception': state.exception_message
+            })
     await websocket.close()
 
 
@@ -312,20 +316,26 @@ async def subscribe_to_dispatcher():
         while True:
             an_update = await websocket.recv()
             print(f'telemetry task: received an update: {an_update}')
-            re_state = json.loads(an_update)['state']
-            print(f'telemetry task: re_state: {re_state}')
-            if re_state == 'idle':
-                print('telemetry task: Just set busy as False, now '
-                      'notifying coroutines')
-                state.busy = False
-                await notify_coroutines('busy')
-                print('telemetry task: DONE notifying coroutines')
-            if re_state == 'running':
-                state.busy = True
-                print('telemetry task: Just set busy as False, now '
-                      'notifying coroutines')
-                await notify_coroutines('busy')
-                print('telemetry task: DONE notifying coroutines')
+            if json.loads(an_update)['type'] == 'status':
+                re_state = json.loads(an_update)['state']
+                print(f'telemetry task: re_state: {re_state}')
+                if re_state == 'idle':
+                    print('telemetry task: Just set busy as False, now '
+                          'notifying coroutines')
+                    state.busy = False
+                    await notify_coroutines('busy')
+                    print('telemetry task: DONE notifying coroutines')
+                if re_state == 'running':
+                    state.busy = True
+                    print('telemetry task: Just set busy as False, now '
+                          'notifying coroutines')
+                    await notify_coroutines('busy')
+                    print('telemetry task: DONE notifying coroutines')
+            elif json.loads(an_update)['type'] == 'exception':
+            # about and message are the available keys when type is exception
+            # and we can pretty much ignore 'about'
+                state.exception_message = json.loads(an_update)['message']
+                await notify_coroutines('exception')
 
 async def bluesky_telemetry_task():
     """Basically this is the connection between this api and the bluesky
