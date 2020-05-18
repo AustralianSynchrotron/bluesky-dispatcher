@@ -70,6 +70,33 @@ def do_fake_scan(
 # create an instance of the BlueskyDispatcher:
 bd = BlueskyDispatcher(port=WEBSOCKET_CONTROL_PORT)
 
+
+def mycb(name, doc):
+    print("#########################")
+    print(name)
+    print(doc)
+    print("#########################")
+
+
+token1 = bd.subscribe_callback_function(mycb)
+token2 = bd.subscribe_callback_function(mycb, "start")
+bd.unsubscribe_callback_function(token2)
+token2 = bd.subscribe_callback_function(mycb, "start")
+bd.unsubscribe_callback_function(token2)
+token2 = bd.subscribe_callback_function(mycb, "start")
+bd.unsubscribe_callback_function(token2)
+token2 = bd.subscribe_callback_function(mycb, "start")
+bd.unsubscribe_callback_function(token2)
+
+try:
+    print("testing the exception raising when asked"
+          " to unsubscribe with a bad token")
+    bd.unsubscribe_callback_function(404)
+except LookupError as e:
+    print("caught exception as expected")
+    print(e)
+
+
 # add the function we defined to the dispatcher,
 # providing a label which is how we will refer to the plan later in our sent
 # websocket messages:

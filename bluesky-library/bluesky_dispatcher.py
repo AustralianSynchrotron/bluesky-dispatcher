@@ -111,13 +111,33 @@ class BlueskyDispatcher:
         # subscriber clients. Or if it should re raise the exceptions to the
         # user's calling code.
 
-        self._selected_scan = None  # acts as a pointer to whichever scan
-                                    # function is to be executed.
-        self._supplied_params = None  # when the selected_scan is called, these
-                                     # will be supplied as long as they are not
-                                     # None
-        self._scan_functions = {}  # key = name of the scan
+        self._selected_scan = None
+        # acts as a pointer to whichever scan function is to be executed.
+
+        self._supplied_params = None
+        # when the selected_scan is called, these will be supplied as long as
+        # they are not None
+
+        self._scan_functions = {}
+        # The dict of bluesky plan scan functions registered against this
+        # dispatcher.
+        # key = name of the scan
         # value = a python function matching the required signature
+
+        self._callback_count = 0
+
+        self._callbacks_to_subscribe = []
+        # The list of callback functions to be subscribed to the run engine
+        # instance (no matter the scan/plan being run),
+        # Example value:
+        # [
+        #   {func: callback_function_1, name: "all"},
+        #   {func: callback_function_2, name: "stop"}
+        # ]
+        # Why?: (the need to maintain a list is to ensure that if in future
+        # the run engine instance is discarded and recreated anew after every
+        # 'run' that the subsequent instance can be set up with the same
+        # subscriptions.)
 
         self._busy = threading.Lock()
         # Used by the RunEngine to signal that it's currently busy. Read by the
@@ -170,6 +190,85 @@ class BlueskyDispatcher:
                                 f'remove_scan("{scan_name}")')
         if self.__good_function_signature(scan_function):
             self._scan_functions[scan_name] = scan_function
+
+    def _get_next_callback_token(self):
+        """ function to get the next usable token int value for returning to
+        users that call the subscribe_callback_function method to ensure
+        always a unique token value, but without using the value returned by
+        the runEngine so as to abstract the implementation of the assignment
+        of tokens within the run engine, thereby allowing this dispatcher to
+        have the freedom to destroy and recreate the runEngine instance. """
+        tokenint_to_return = self._callback_count
+        # the token is basically just a value that increments whenever a
+        # new function is subscribed.
+        self._callback_count += 1
+        return tokenint_to_return
+
+    def _reapply_callback_functions(self):
+        """to be used in the event that the self._RE instance gets recreated,
+        so as to ensure the new instance is subscribed to all the same
+        callback functions as the previous instance was"""
+        for cb in self._callbacks_to_subscribe:
+            new_actual_token = self._RE.subscribe(cb["func"], cb["name"])
+            # and update the stored actual token (leaving the user held token
+            # unchanged):
+            cb["actual_token"] = new_actual_token
+
+    def subscribe_callback_function(self, func, name="all"):
+        """ subscribe function to mirror the run engine's subscribe function
+        which uses the same signature, The purpose of this function is to
+        abstract away the access to the run engine, so that the
+        dispatcher may have the freedom to recreate the run engine instance
+        at any time. The reason for storing the provided callback function in
+        the list called _callbacks_to_subscribe is so that in the event that the
+        runengine IS recreated, the same callbacks can be applied to it.
+
+        The reason we don't return to the user the actual_token value,
+        (but instead one we control) is so that we don't have to depend on the
+        returned value from the actual runengine instance being deterministic
+        every time this dispatcher may decide to recreate the instance and
+        re-subscribe all the callbacks.
+
+        "actual_token" key is to store the value as returned by the LAST and
+        most RECENT time THAT callback function was subscribed to THIS
+        self._RE instance (so we don't depend on the run engine's
+        implementation being deterministic about the assignment of return
+        tokenint values)
+
+        "token_int" key is the value we returned to the user and so need to
+        remember for when they wish to unsubscribe
+        """
+        actual_token = self._RE.subscribe(func, name)
+        token_to_return = self._get_next_callback_token()
+        self._callbacks_to_subscribe.append(
+            {
+                "func": func,
+                "name": name,
+                "actual_token": actual_token,
+                "user_held_token": token_to_return
+            })
+        return token_to_return
+
+    def unsubscribe_callback_function(self, user_held_token):
+        """ unsubscribes the callback function from the run engine denoted by
+        the user_held_token value"""
+        # figure out the actual token from the user held token:
+        actual_token = None
+        for cb in self._callbacks_to_subscribe:
+            if cb["user_held_token"] == user_held_token:
+                actual_token = cb["actual_token"]
+                break
+        # unsubscribe the function from the current RE instance:
+        if actual_token is None:
+            raise LookupError(f"No callback function previously registered "
+                              f"with token: {user_held_token}")
+        else:
+            self._RE.unsubscribe(actual_token)
+            # and prevent it being reapplied in the event of RE recreation,
+            # amend our _callbacks_to_subscribe list:
+            self._callbacks_to_subscribe = [
+                entry for entry in self._callbacks_to_subscribe if
+                entry["user_held_token"] != user_held_token]
 
     def remove_scan(self, scan_name):
         if scan_name not in self._scan_functions:
