@@ -224,6 +224,57 @@ if __name__ is '__main__':
     run_scan()
 ```
 
+#### Pass it a callback function you want subscribed to the run engine.
+
+If you wish to provide a callback function that should be subscribed to the run
+engine instance and **affect all scans** you have added (the above snippet only
+added the one, but we could add multiple) then you can optionally provide the
+dispatcher instance with a callback function that you wish the run engine
+instance be subscribed to before it's even passed to any of your scan functions
+as the first parameter.
+
+The dispatcher will now use the provided callbacks for **all** plans that it
+runs.
+
+If we don't want that behaviour because we want to use a different callback
+function for a different scan, then we should subscribe the callback
+function *within* the scan/plan function and backwork with the run engine
+instance we get passed (as the first parameter to our scan function).
+
+
+```python
+from devices import RedisSlewScan
+from bluesky import RunEngine
+from bluesky.plans import count
+from bluesky.preprocessors import SupplementalData
+from bluesky-library import bluesky_dispatcher
+
+def run_scan(RE, hook_func, name='slew_scan_demo', start_y=50, height=100, pitch=20):
+    # set up redis slew scan device
+    ss = RedisSlewScan(name, start_y, height, pitch)
+    
+    # set up monitors
+    sd = SupplementalData()
+    sd.monitors.append(ss)      # set callback onto slew scan object
+    
+    # set up run engine
+    RE.subscribe(print)
+    # can subscribe to best effort callback or kafka producer
+    RE.preprocessors.append(sd) # adding sd monitor to sd run engine callbacks
+    RE(count([ss]))
+
+if __name__ is '__main__':
+    bd = bluesky_dispatcher(port=8765)
+    bd.add_scan(run_scan, 'slew_scan')
+#-------------------------------------------------------------------------------
+    from bluesky.callbacks.best_effort import BestEffortCallback
+    bec = BestEffortCallback()
+    bec_token_to_unsubscribe = bd.subscribe_callback_function(bec)
+    # bec_token_to_unsubscribe is necessary if you want to later unsubscribe.
+#---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    run_scan()
+```
+
 #### Call its start method.
 
 ```python
@@ -252,7 +303,8 @@ if __name__ is '__main__':
     bd.add_scan(run_scan, 'slew_scan')
     bd.start()
 #---^^^^^^^^^^------------------------------------------------------------------
-    # run_scan()
+    # run_scan()  <--- this line is no longer needed, the dispatcher will
+    # effectively make this call, when an appropriate websocket message is sent
 ```
 
 Now from a websocket client of your choice connect to the dispatchers websocket
@@ -564,6 +616,9 @@ type **'subscribe'**:
 
 For when you want to subscribe to a constant stream of updates whenever the
 run engine's state changes, so as to know the 'busy' status of the dispatcher.
+
+*note that this subscribe is not the same as the bluesky run engine's method
+also called subscribe*
 
 *no other keys*
 
