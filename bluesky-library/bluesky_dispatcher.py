@@ -25,6 +25,7 @@ you will get:
 
     - a websocket server that can be 'subscribed' to in order to receive live
         message updates whenever the state of the RunEngine changes.
+        Including information about the current run.
 
     - The ability to create a system where custom scan scripts can be loaded and
         used by users that pass their parameters and control the RunEngine
@@ -73,6 +74,7 @@ import threading
 import logging
 import asyncio
 import websockets
+import datetime
 import json
 import time
 import functools  # necessary for https://docs.python.org/3.6/library/asyncio-eventloop.html#asyncio.loop.run_in_executor
@@ -82,8 +84,12 @@ from queue import Queue
 
 logger = logging.getLogger(__name__)
 
+VERSION = "1.0.2"  # semantic versioning
+
 
 def timestamp():
+    """ this is used by logger statements, nothing to do with bluesky run
+    start times"""
     return "[" + time.strftime("%d.%b %Y %H:%M:%S") + "]: "
 
 
@@ -98,10 +104,17 @@ class ScanNameError(Exception):
 class BlueskyDispatcher:
 
     def __init__(self, port=8765, handle_exceptions=False):
+        self.version = VERSION
+
         self._RE = RunEngine(context_managers=[])
         # passing empty array as context managers so that the run engine will
         # not try to register signal handlers or complain that it's not the
         # main thread
+
+        # subscribe our own callback in order to extract the UID of a run and
+        # store it in our self._run_uid:
+        self._RE.subscribe(self._extract_uid_callback, name="start")
+
         self._websocket_port = port
 
         self._handle_exceptions = handle_exceptions
@@ -113,6 +126,20 @@ class BlueskyDispatcher:
 
         self._selected_scan = None
         # acts as a pointer to whichever scan function is to be executed.
+
+        self._run_uid = None
+        # during execution of a bluesky plan: hold the UID of the run
+        # this is intended to aid any clients know where to retrieve their
+        # data at a later point if needed, for transparency.
+
+        self._run_start_time = None
+        # during execution of a bluesky plan: store the time
+        # this is intended to aid any clients that wish to determine how
+        # long a run has been going for.
+        # created with time_stamp = datetime.datetime.now(datetime.timezone.utc)
+        # stringified with: time_str = time_stamp.__str__()
+        # and decoded back to an object with:
+        # new_time_stamp = datetime.datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S.%f%z')
 
         self._supplied_params = None
         # when the selected_scan is called, these will be supplied as long as
@@ -178,8 +205,8 @@ class BlueskyDispatcher:
         # coroutine_to_bridge_thread_events_to_asyncio function can work through
         # the items to one-by-one notify waiting websocket coroutines through
         # the above asyncio.Event()
-        self._RE.state_hook = self.__state_hook
-        logger.debug('BlueskyDispatcher initialised.')
+        self._RE.state_hook = self._state_hook
+        logger.info(f'BlueskyDispatcher({VERSION}) initialised.')
 
     def add_scan(self, scan_function, scan_name):
         if scan_name in self._scan_functions:
@@ -188,31 +215,8 @@ class BlueskyDispatcher:
                                 f'previously supplied scan function remove the '
                                 f'existing one first with '
                                 f'remove_scan("{scan_name}")')
-        if self.__good_function_signature(scan_function):
+        if self._good_function_signature(scan_function):
             self._scan_functions[scan_name] = scan_function
-
-    def _get_next_callback_token(self):
-        """ function to get the next usable token int value for returning to
-        users that call the subscribe_callback_function method to ensure
-        always a unique token value, but without using the value returned by
-        the runEngine so as to abstract the implementation of the assignment
-        of tokens within the run engine, thereby allowing this dispatcher to
-        have the freedom to destroy and recreate the runEngine instance. """
-        tokenint_to_return = self._callback_count
-        # the token is basically just a value that increments whenever a
-        # new function is subscribed.
-        self._callback_count += 1
-        return tokenint_to_return
-
-    def _reapply_callback_functions(self):
-        """to be used in the event that the self._RE instance gets recreated,
-        so as to ensure the new instance is subscribed to all the same
-        callback functions as the previous instance was"""
-        for cb in self._callbacks_to_subscribe:
-            new_actual_token = self._RE.subscribe(cb["func"], cb["name"])
-            # and update the stored actual token (leaving the user held token
-            # unchanged):
-            cb["actual_token"] = new_actual_token
 
     def subscribe_callback_function(self, func, name="all"):
         """ subscribe function to mirror the run engine's subscribe function
@@ -281,7 +285,7 @@ class BlueskyDispatcher:
         logger.info('BlueskyDispatcher starting…')
         ws_thread_ready = threading.Event()
         #   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .
-        ws_thread = threading.Thread(target=self.__websocket_thread,
+        ws_thread = threading.Thread(target=self._websocket_thread,
                                      kwargs={'ready_signal': ws_thread_ready},
                                      daemon=True,
                                      name="websocket_thread")
@@ -332,15 +336,17 @@ class BlueskyDispatcher:
             self._start_scanning.clear()
             scan_func = self._scan_functions[self._selected_scan]
             try:
+                self._run_start_time = datetime.datetime.now(
+                        datetime.timezone.utc)
                 if self._supplied_params is not None:
                     scan_func(
                         self._RE,
-                        self.__state_hook,  # Todo: NO state_hook (just testing!)
+                        self._state_hook,  # Todo: NO state_hook (just testing!)
                         **self._supplied_params)
                 else:
                     # this avoids executing self._selected_scan(…, **None) which
                     # raises "TypeError: arg after ** must be a mapping"
-                    scan_func(self._RE, self.__state_hook)
+                    scan_func(self._RE, self._state_hook)
 
             except Exception as e:
                 name_and_shame = (f'supplied plan with name '
@@ -356,7 +362,7 @@ class BlueskyDispatcher:
             # We rely on the supplied_params being set by the code that
             # .set() the start_scanning Event BEFORE it .set() the
             # start_scanning Event, (we appropriately reset it afterwards)
-            self._supplied_params = None
+            self._reset_dispatcher_state_after_run()
             # I'm not sure how to detect that if _supplied_params is not
             # None, that it then pertains to the function we are about to
             # call and not a different previous function that was called.
@@ -395,7 +401,70 @@ class BlueskyDispatcher:
 
     ####    Start of Private methods:
 
-    def __good_function_signature(self, function):
+    def _reset_dispatcher_state_after_run(self):
+        self._selected_scan = None
+        self._run_start_time = None
+        self._run_uid = None
+        # this is where we would also recycle our runEngine instance if we
+        # wanted to ensure a defined start state for the next run (The reason
+        # you may end up with an undefined state prior to a subsequent run,
+        # would be if the previous run left the runEngine instance altered in
+        # some way (subscribing a callback is one way). )
+        # a call to recycle the RE instance should be followed by a call to
+        # _reapply_callback_functions()
+
+    def _get_next_callback_token(self):
+        """ function to get the next usable token int value for returning to
+        users that call the subscribe_callback_function method to ensure
+        always a unique token value, but without using the value returned by
+        the runEngine so as to abstract the implementation of the assignment
+        of tokens within the run engine, thereby allowing this dispatcher to
+        have the freedom to destroy and recreate the runEngine instance. """
+        tokenint_to_return = self._callback_count
+        # the token is basically just a value that increments whenever a
+        # new function is subscribed.
+        self._callback_count += 1
+        return tokenint_to_return
+
+    def _extract_uid_callback(self, name, doc):
+        """callback to register against the run engine in order to extract
+        the run UID (for benefit of any subsequent subscribers)
+        (only registered against "start" bluesky documents so we ignore
+        "name" param)"""
+        self._run_uid = doc["uid"]
+
+        # This callback is being called by the run engine after it's already
+        # started, so the state hook has already detected a change in the run
+        # engine state and started the "push notification out to websocket
+        # clients" process so by now the clients will already have gotten a
+        # message describing basically all the below but where the run_uid
+        # was not yet set (since we only just set it here now) so this
+        # basically sends the same document but this time the run_uid will be
+        # populated (sending the seemingly same information for the other
+        # fields again because, a) it can't hurt and b) the client need not
+        # write logic to deal with the case when certain attributes are omitted.
+        self._re_state_changes_q.put(
+            {'exception': False,
+             'state': self._RE.state,
+             'run_uid': self._run_uid,
+             'plan_name': self._selected_scan,
+             'run_start_time': self._run_start_time})
+
+    def _reapply_callback_functions(self):
+        """to be used in the event that the self._RE instance gets recreated,
+        so as to ensure the new instance is subscribed to all the same
+        callback functions as the previous instance was"""
+
+        # firstly reapply our own callback to extract the UID:
+        self._RE.subscribe(self._extract_uid_callback, name="start")
+
+        for cb in self._callbacks_to_subscribe:
+            new_actual_token = self._RE.subscribe(cb["func"], cb["name"])
+            # and update the stored actual token (leaving the user held token
+            # unchanged):
+            cb["actual_token"] = new_actual_token
+
+    def _good_function_signature(self, function):
         """checks that the supplied function has a signature that matches our
         requirements (first two args are positional, remaining args are named
         and optional"""
@@ -417,17 +486,27 @@ class BlueskyDispatcher:
                           "RunEngine and StateHook"
         return True
 
-    def __state_hook(self, new_state, old_state):
+    def _state_hook(self, new_state, old_state):
         """this function will be called from the main thread, by the
         RunEngine code whenever its state changes.
+        (This code will NOT execute concurrently with the run engine code)
+        (This code WILL execute concurrently with the websocket/s code)
         """
+        # prepare start time as string form, not object. it's for sending as
+        # json.
+        start_time_str = self._run_start_time
+        if start_time_str is not None:
+            start_time_str = start_time_str.__str__()
         # https://docs.python.org/3.6/library/queue.html
         self._re_state_changes_q.put(
             {'new_state': new_state,
              'old_state': old_state,
-             'exception': False})
+             'exception': False,
+             'run_uid': self._run_uid,
+             'plan_name': self._selected_scan,
+             'run_start_time': start_time_str})
 
-    async def __bridge_queue_events_to_coroutines(self,
+    async def _bridge_queue_events_to_coroutines(self,
                                                   loop,
                                                   queue,
                                                   asyncio_event):
@@ -470,7 +549,7 @@ class BlueskyDispatcher:
             # makes them await it they will again be shelved out of the event
             # loop until it is once again set().
 
-            await self.__yield_control_back_to_event_loop()
+            await self._yield_control_back_to_event_loop()
             # deliberately pass control back to the event loop so that the
             # coroutines that are now back in the loop can run before we reset
             # the global variable they will be referring to.
@@ -479,11 +558,11 @@ class BlueskyDispatcher:
 
             queue.task_done()
 
-    async def __yield_control_back_to_event_loop(self):
+    async def _yield_control_back_to_event_loop(self):
         await asyncio.sleep(0)
         # https://github.com/python/asyncio/issues/284
 
-    def __websocket_thread(self, ready_signal=None):
+    def _websocket_thread(self, ready_signal=None):
         # runs in the other (asyncio driven) thread (not the main thread)
         logger.debug("websocket thread: establishing new event loop")
         loop_for_this_thread = asyncio.new_event_loop()
@@ -496,7 +575,7 @@ class BlueskyDispatcher:
         logger.debug("websocket thread: starting websocket control server")
         loop_for_this_thread.run_until_complete(
             websockets.serve(
-                self.__websocket_server,
+                self._websocket_server,
                 "0.0.0.0",
                 self._websocket_port))
 
@@ -505,7 +584,7 @@ class BlueskyDispatcher:
         self._websocket_state_update = asyncio.Event(loop=loop_for_this_thread)
         logger.debug("websocket thread: starting events bridging function")
         asyncio.ensure_future(
-            self.__bridge_queue_events_to_coroutines(
+            self._bridge_queue_events_to_coroutines(
                 loop_for_this_thread,
                 self._re_state_changes_q,
                 self._websocket_state_update), loop=loop_for_this_thread)
@@ -515,7 +594,7 @@ class BlueskyDispatcher:
         loop_for_this_thread.run_forever()
         loop_for_this_thread.close()
 
-    async def __websocket_server(self, websocket, path):
+    async def _websocket_server(self, websocket, path):
         # runs in the other (asyncio driven) thread (not the main thread)
         logger.info("websocket server: client connected to me!")
         logger.debug(f'websocket server: runengine state: {self._RE.state}')
@@ -716,10 +795,20 @@ class BlueskyDispatcher:
             elif obj['type'] == "subscribe":
                 # if client wants to subscribe to runengine state updates,
                 # send them an initial message containing the current state
+                # as derived from the self instance attributes.
+                # quick preprocessing of the start time so we don't call
+                # None.__str__(), otherwise other end will get a string "None"
+                start_time = None
+                if self._run_start_time is not None:
+                    start_time = self._run_start_time.__str__()
                 await websocket.send(json.dumps({
+                    'bluesky_dispatcher_version': VERSION,
                     'type': "status",
                     'about': "run engine state updates",
-                    'state': self._RE.state
+                    'state': self._RE.state,  # a string
+                    'plan_name': self._selected_scan,  # a string
+                    'run_uid': self._run_uid,  # a string
+                    'run_start_time': start_time  # a string
                 }))
                 while True:
                     # then wait until the state is updated:
@@ -738,11 +827,24 @@ class BlueskyDispatcher:
                             'message': self._re_state_changes_data['message']
                         }))
                     else:
+                        # NOTE: we derive our values from those
+                        # stored in the state_changes_data dict
+                        # because this is not going to change between
+                        # swappings of coroutines, (if we derived the
+                        # current state from the actual RE instance and
+                        # self. properties then we risk missing fully formed
+                        # updates because of race conditions
                         await websocket.send(json.dumps({
                             'type': "status",
                             'about': "run engine state updates",
                             'state': self._re_state_changes_data['new_state'],
-                            'old_state': self._re_state_changes_data['old_state']
+                            'old_state': self._re_state_changes_data['old_state'],
+                            'plan_name': self._re_state_changes_data[
+                                'plan_name'],  # a string
+                            'run_uid': self._re_state_changes_data['run_uid'],
+                            # a string
+                            'run_start_time': self._re_state_changes_data[
+                                'run_start_time']  # a string
                         }))
             # client's message doesn't match any of the above, therefore we
             # don't know what they want from us:
