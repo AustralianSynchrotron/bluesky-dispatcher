@@ -193,6 +193,12 @@ if __name__ is '__main__':
     run_scan()
 ```
 
+You can confirm the version by checking your dispatcher instance's
+version attribute:
+    
+    bd = bluesky_dispatcher(port=8765)
+    print(f"got myself a dispatcher instance on version {bd.version}")
+
 #### Pass it your function along with a name.
 
 
@@ -356,7 +362,7 @@ type **'start'**:
 
 example sent message:
 
-```
+```python
 json.dumps({
     "type": "start",
     "plan": "slew-scan",
@@ -369,7 +375,7 @@ json.dumps({
 
 example received success response:
 
-```
+```json
 {
     "success": True,
     "status": "Signalling main thread to start a new scan",
@@ -384,7 +390,7 @@ example received failure responses:
 
 when the dispatcher is already running a scan:
 
-```
+```json
 {
     "success": False,
     "status": "Currently busy with \"slew_scan\" scan"
@@ -393,7 +399,7 @@ when the dispatcher is already running a scan:
 
 when a required param wasn't supplied:
 
-```
+```json
 {
     "success": False,
     "status": "You need to provide a \"plan\" key specifying which scan you want to start"
@@ -402,7 +408,7 @@ when a required param wasn't supplied:
 
 when the requested scan is not known:
 
-```
+```json
 {
     "success": False,
     "status": "I don\'t recognise any scan function by the name \"slew_scan\""
@@ -418,7 +424,7 @@ have the run be marked as aborted.
 
 example sent message:
 
-```
+```python
 json.dumps({
     "type": "halt"
 })
@@ -426,7 +432,7 @@ json.dumps({
 
 example received success response:
 
-```
+```json
 {
     "success": True,
     "status": "halt requested"
@@ -435,7 +441,7 @@ example received success response:
 
 example received failure response:
 
-```
+```json
 {
     "success": False,
     "status": "exception was raised",
@@ -454,7 +460,7 @@ the run be marked as aborted.
 
 example sent message:
 
-```
+```python
 json.dumps({
     "type": "abort",
     "reason": "sample mount failed midway through scanning"
@@ -463,7 +469,7 @@ json.dumps({
 
 example received success response:
 
-```
+```json
 {
     "success": True,
     "status": "abort requested"
@@ -472,7 +478,7 @@ example received success response:
 
 example received failure response:
 
-```
+```json
 {
     "success": False,
     "status": "exception was raised",
@@ -489,7 +495,7 @@ the run be marked as successful.
 
 example sent message:
 
-```
+```python
 json.dumps({
     "type": "stop"
 })
@@ -497,7 +503,7 @@ json.dumps({
 
 example received success response:
 
-```
+```json
 {
     "success": True,
     "status": "stop requested"
@@ -506,7 +512,7 @@ example received success response:
 
 example received failure response:
 
-```
+```json
 {
     "success": False,
     "status": "exception was raised",
@@ -522,7 +528,7 @@ For when you want to pause a running scan.
 
 example sent message:
 
-```
+```python
 json.dumps({
     "type": "pause"
 })
@@ -530,7 +536,7 @@ json.dumps({
 
 example received success response:
 
-```
+```json
 {
     "success": True,
     "status": "pause requested"
@@ -539,7 +545,7 @@ example received success response:
 
 example received failure response:
 
-```
+```json
 {
     "success": False,
     "status": "exception was raised",
@@ -555,7 +561,7 @@ For when you want to resume a paused scan.
 
 example sent message:
 
-```
+```python
 json.dumps({
     "type": "resume"
 })
@@ -563,7 +569,7 @@ json.dumps({
 
 example received success response:
 
-```
+```json
 {
     "success": True,
     "status": "resume requested"
@@ -573,14 +579,14 @@ example received success response:
 example received failure responses:
 
 when the run engine isn't in a paused state:
-```
+```json
 {
     "success": False,
     "status": "cannot resume a runEngine that isn\'t paused"
 }
 ```
 
-```
+```json
 {
     "success": False,
     "status": "exception was raised",
@@ -596,7 +602,7 @@ For when you want to probe the current state of the Bluesky run engine.
 
 example sent message:
 
-```
+```python
 json.dumps({
     "type": "state"
 })
@@ -604,7 +610,7 @@ json.dumps({
 
 example received success response:
 
-```
+```json
 {
     "type": "status",
     "about": "current state of the Bluesky RunEngine",
@@ -624,7 +630,7 @@ also called subscribe*
 
 example sent message:
 
-```
+```python
 json.dumps({
     "type": "subscribe"
 })
@@ -632,16 +638,76 @@ json.dumps({
 
 example received success response:
 
-```
+```json
 {
+    "bluesky_dispatcher_version": "1.0.1",
     "type": "status",
     "about": "run engine state updates",
-    "state": "idle"
+    "state": "idle",
+    "plan_name": null,
+    "run_uid": null,
+    "run_start_time": null,
 }
 ```
 
 *connection is then maintained and client will continue to receive state
 messages whenever an update occurs*
+
+example follow-up websocket status message triggered by the run engine moving
+from a state of "idle" to "running" because it's starting a plan that was
+registered with the name "motor_scan":
+
+
+```json
+{
+    "type": "status",
+    "about": "run engine state updates",
+    "state": "running",
+    "old_state": "idle",
+    "plan_name": "motor_scan",
+    "run_uid": null,
+    "run_start_time": '2020-06-01 14:30:08.255788+00:00',
+}
+```
+
+which will probably immediately be followed by another message once the
+run engine generates its first "start" document and the UID is known:
+
+```json
+{
+    "type": "status",
+    "about": "run engine state updates",
+    "state": "running",
+    "old_state": "idle",
+    "plan_name": "motor_scan",
+    "run_uid": "5c8ee8a3-ee4d-41e2-86de-8dd851dc0859",
+    "run_start_time": "2020-06-01 02:55:35.121570+00:00",
+}
+```
+
+The run_uid can be useful for users who may want to associate what they see on
+their screen with the data being stored on disc after the experiment
+
+The run start time can be useful if it is desired to display an elapsed time
+for a currently running bluesky plan.
+
+The start time as returned in the json is just a string, if you're working with
+it in python you can convert it into a datetime object with the following logic:
+
+```python
+import datetime
+start_time_str = "2020-06-01 02:55:35.121570+00:00"
+time_obj = datetime.datetime.strptime(start_time_str, '%Y-%m-%d %H:%M:%S.%f%z')
+```
+    
+
+or if using javascript to interpret it, you can get it into native millisecond
+Date type with:
+
+```javascript
+let runStartTime = new Date('2020-06-01 02:55:35.121570+00:00');
+let elapsedRunTimeInMilliseconds = Date.now() - runStartTime;
+```
 
 
 ## History
